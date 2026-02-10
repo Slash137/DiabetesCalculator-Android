@@ -10,15 +10,13 @@ Aplicación Android para el cálculo de hidratos, raciones e insulina rápida, c
 
 ## Capturas de pantalla
 
-> Nota: las imágenes son marcadores de posición. Sustitúyelas por capturas reales en `docs/screenshots/` manteniendo los mismos nombres de archivo.
-
 | Nueva comida | Historial |
 |---|---|
-| ![Nueva comida](docs/screenshots/nueva-comida.svg) | ![Historial](docs/screenshots/historial.svg) |
+| ![Nueva comida](docs/screenshots/nueva-comida.png) | ![Historial](docs/screenshots/historial.png) |
 
 | Alimentos | Perfil |
 |---|---|
-| ![Alimentos](docs/screenshots/alimentos.svg) | ![Perfil](docs/screenshots/perfil.svg) |
+| ![Alimentos](docs/screenshots/alimentos.png) | ![Perfil](docs/screenshots/perfil.png) |
 
 ## Funcionalidades clave
 
@@ -109,4 +107,4 @@ Comandos útiles:
 
 ## Licencia
 
-No hay una licencia definida todavía. Añade la licencia adecuada según el uso previsto.
+MIT
