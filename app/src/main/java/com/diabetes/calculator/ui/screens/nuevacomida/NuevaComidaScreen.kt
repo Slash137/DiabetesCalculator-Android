@@ -55,10 +55,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.diabetes.calculator.data.entity.Alimento
@@ -186,6 +189,7 @@ fun NuevaComidaScreen(
     if (showPlantillasDialog) {
         PlantillasDialog(
             plantillas = plantillas,
+            gramosPorRacion = (uiState as? NuevaComidaUiState.Ready)?.profile?.gramosPorRacion ?: 10f,
             onDismiss = { showPlantillasDialog = false },
             onApply = {
                 viewModel.applyPlantilla(it)
@@ -716,6 +720,7 @@ private fun ItemComidaRow(
 @Composable
 private fun PlantillasDialog(
     plantillas: List<PlantillaConItems>,
+    gramosPorRacion: Float,
     onDismiss: () -> Unit,
     onApply: (PlantillaConItems) -> Unit,
     onDelete: (Int) -> Unit
@@ -805,10 +810,14 @@ private fun PlantillasDialog(
                     ) {
                         items(filtered.size) { index ->
                             val plantilla = filtered[index]
-                            val totalGramos = plantilla.items.sumOf { it.item.gramos.toDouble() }.toFloat()
                             val totalHidratos = plantilla.items.sumOf {
                                 (it.item.gramos * (it.alimento.hidratosPor100g / 100f)).toDouble()
                             }.toFloat()
+                            val totalRaciones = if (gramosPorRacion > 0f) {
+                                totalHidratos / gramosPorRacion
+                            } else {
+                                0f
+                            }
                             Card(
                                 colors = CardDefaults.cardColors(
                                     containerColor = MaterialTheme.colorScheme.surfaceContainerLow
@@ -843,29 +852,69 @@ private fun PlantillasDialog(
                                     ) {
                                         TemplateStat(
                                             modifier = Modifier.weight(1f),
-                                            label = "Alimentos",
-                                            value = "${plantilla.items.size}"
+                                            label = "HIDRATOS",
+                                            value = "${format1(totalHidratos)} g",
+                                            color = HidratosColor
                                         )
                                         TemplateStat(
                                             modifier = Modifier.weight(1f),
-                                            label = "HC",
-                                            value = "${format1(totalHidratos)} g"
-                                        )
-                                        TemplateStat(
-                                            modifier = Modifier.weight(1f),
-                                            label = "Peso",
-                                            value = "${format1(totalGramos)} g"
+                                            label = "RACIONES",
+                                            value = format1(totalRaciones),
+                                            color = RacionesColor
                                         )
                                     }
                                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                         val preview = plantilla.items.take(3)
                                         preview.forEach { item ->
                                             val hidratosItem = item.item.gramos * (item.alimento.hidratosPor100g / 100f)
-                                            Text(
-                                                text = "${item.alimento.nombre} • ${format1(item.item.gramos)} g · ${format1(hidratosItem)} g HC",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
+                                            val racionesItem = if (gramosPorRacion > 0f) {
+                                                hidratosItem / gramosPorRacion
+                                            } else {
+                                                0f
+                                            }
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = buildAnnotatedString {
+                                                        withStyle(
+                                                            SpanStyle(color = MaterialTheme.colorScheme.primary)
+                                                        ) {
+                                                            append(item.alimento.nombre)
+                                                        }
+                                                        withStyle(
+                                                            SpanStyle(color = MaterialTheme.colorScheme.outline)
+                                                        ) {
+                                                            append(" • ")
+                                                        }
+                                                        withStyle(
+                                                            SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                        ) {
+                                                            append("${format1(item.item.gramos)} g")
+                                                        }
+                                                    },
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    text = buildAnnotatedString {
+                                                        withStyle(SpanStyle(color = HidratosColor)) {
+                                                            append("${format1(hidratosItem)} g HC")
+                                                        }
+                                                        withStyle(SpanStyle(color = MaterialTheme.colorScheme.outline)) {
+                                                            append(" • ")
+                                                        }
+                                                        withStyle(SpanStyle(color = RacionesColor)) {
+                                                            append("${format1(racionesItem)} R")
+                                                        }
+                                                    },
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                            }
                                         }
                                         val remaining = plantilla.items.size - preview.size
                                         if (remaining > 0) {
@@ -951,15 +1000,19 @@ private fun format1(value: Float): String = String.format(Locale.getDefault(), "
 private fun TemplateStat(
     modifier: Modifier = Modifier,
     label: String,
-    value: String
+    value: String,
+    color: androidx.compose.ui.graphics.Color,
+    isMain: Boolean = true
 ) {
-    Surface(
+    Card(
         modifier = modifier,
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(10.dp)
+        colors = CardDefaults.cardColors(
+            containerColor = if (isMain) color.copy(alpha = 0.1f) else MaterialTheme.colorScheme.surface
+        ),
+        shape = RoundedCornerShape(12.dp)
     ) {
         Column(
-            modifier = Modifier.padding(vertical = 8.dp, horizontal = 6.dp),
+            modifier = Modifier.padding(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
@@ -971,8 +1024,9 @@ private fun TemplateStat(
             )
             Text(
                 text = value,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
+                style = if (isMain) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Bold,
+                color = if (isMain) color else MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
             )

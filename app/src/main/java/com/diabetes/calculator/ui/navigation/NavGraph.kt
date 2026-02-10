@@ -418,7 +418,10 @@ fun DiabetesNavGraph(app: DiabetesApp) {
                     }
                     Screen.Historial -> {
                         val viewModel: HistorialViewModel = viewModel(
-                            factory = HistorialViewModel.Factory(app.registroRepository)
+                            factory = HistorialViewModel.Factory(
+                                app.registroRepository,
+                                app.plantillaRepository
+                            )
                         )
                         HistorialScreen(viewModel = viewModel)
                     }

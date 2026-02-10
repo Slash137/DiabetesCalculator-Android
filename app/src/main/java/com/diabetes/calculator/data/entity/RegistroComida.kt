@@ -20,6 +20,8 @@ import kotlinx.serialization.Serializable
  * @property fecha Timestamp del registro
  * @property glucosaAntesMgdl Glucosa medida al guardar el registro (mg/dL)
  * @property glucosaDespues2hMgdl Glucosa medida 2h después (mg/dL)
+ * @property dosisEstado Estado de aplicación de la dosis recomendada
+ * @property dosisConfirmadaAt Timestamp real de aplicación si se confirmó
  */
 @Entity(tableName = "registro_comida")
 @Serializable
@@ -33,5 +35,7 @@ data class RegistroComida(
     val fecha: Long = System.currentTimeMillis(),
     val notas: String? = null,
     val glucosaAntesMgdl: Int? = null,
-    val glucosaDespues2hMgdl: Int? = null
+    val glucosaDespues2hMgdl: Int? = null,
+    val dosisEstado: String = EstadoDosis.PENDIENTE.value,
+    val dosisConfirmadaAt: Long? = null
 )

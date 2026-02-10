@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -32,6 +33,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.diabetes.calculator.data.dao.RegistroComidaConItems
+import com.diabetes.calculator.data.entity.EstadoDosis
 import com.diabetes.calculator.ui.components.AvisoMedicoCompacto
 import com.diabetes.calculator.ui.theme.HidratosColor
 import com.diabetes.calculator.ui.theme.InsulinaColor
@@ -48,9 +50,33 @@ fun HistorialScreen(
     val uiState by viewModel.uiState.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val dayFilter by viewModel.dayFilter.collectAsState()
-    var showFilterMenu by remember { mutableStateOf(false) }
+    val doseStatusFilter by viewModel.doseStatusFilter.collectAsState()
+    var showDayFilterMenu by remember { mutableStateOf(false) }
+    var showDoseStatusMenu by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<RegistroComidaConItems?>(null) }
     var detailRegistro by remember { mutableStateOf<RegistroComidaConItems?>(null) }
+    var plantillaRegistro by remember { mutableStateOf<RegistroComidaConItems?>(null) }
+    var plantillaNombre by remember { mutableStateOf("") }
+
+    val onUpdateDoseStatus: (RegistroComidaConItems, EstadoDosis) -> Unit = { registro, nuevoEstado ->
+        val anterior = EstadoDosis.fromValue(registro.registro.dosisEstado)
+        if (anterior == nuevoEstado) {
+            Unit
+        } else {
+            val previousDetail = detailRegistro
+            val confirmedAt = if (nuevoEstado == EstadoDosis.APLICADA) System.currentTimeMillis() else null
+            viewModel.updateDoseStatus(registro.registro.id, nuevoEstado)
+
+            if (previousDetail?.registro?.id == registro.registro.id) {
+                detailRegistro = previousDetail.copy(
+                    registro = previousDetail.registro.copy(
+                        dosisEstado = nuevoEstado.value,
+                        dosisConfirmadaAt = confirmedAt
+                    )
+                )
+            }
+        }
+    }
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -67,56 +93,103 @@ fun HistorialScreen(
                     .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp)
             )
 
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = viewModel::updateSearchQuery,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                     placeholder = { Text("Buscar en historial...") },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp)
                 )
-                Spacer(modifier = Modifier.width(8.dp))
-                Box {
-                    OutlinedButton(
-                        onClick = { showFilterMenu = true },
-                        shape = RoundedCornerShape(12.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
-                        modifier = Modifier.height(56.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.DateRange,
-                            contentDescription = null
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(dayFilter.label)
-                    }
-                    DropdownMenu(
-                        expanded = showFilterMenu,
-                        onDismissRequest = { showFilterMenu = false }
-                    ) {
-                        DayFilter.values().forEach { filter ->
-                            DropdownMenuItem(
-                                text = { Text(filter.label) },
-                                onClick = {
-                                    viewModel.updateDayFilter(filter)
-                                    showFilterMenu = false
-                                },
-                                trailingIcon = {
-                                    if (filter == dayFilter) {
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = null
-                                        )
-                                    }
-                                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        OutlinedButton(
+                            onClick = { showDayFilterMenu = true },
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+                            modifier = Modifier
+                                .height(48.dp)
+                                .fillMaxWidth()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DateRange,
+                                contentDescription = null
                             )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(dayFilter.label)
+                        }
+                        DropdownMenu(
+                            expanded = showDayFilterMenu,
+                            onDismissRequest = { showDayFilterMenu = false }
+                        ) {
+                            DayFilter.values().forEach { filter ->
+                                DropdownMenuItem(
+                                    text = { Text(filter.label) },
+                                    onClick = {
+                                        viewModel.updateDayFilter(filter)
+                                        showDayFilterMenu = false
+                                    },
+                                    trailingIcon = {
+                                        if (filter == dayFilter) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = null
+                                            )
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    Box(modifier = Modifier.weight(1f)) {
+                        OutlinedButton(
+                            onClick = { showDoseStatusMenu = true },
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+                            modifier = Modifier
+                                .height(48.dp)
+                                .fillMaxWidth()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Medication,
+                                contentDescription = null
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(doseStatusFilter.label)
+                        }
+                        DropdownMenu(
+                            expanded = showDoseStatusMenu,
+                            onDismissRequest = { showDoseStatusMenu = false }
+                        ) {
+                            DoseStatusFilter.values().forEach { filter ->
+                                DropdownMenuItem(
+                                    text = { Text(filter.label) },
+                                    onClick = {
+                                        viewModel.updateDoseStatusFilter(filter)
+                                        showDoseStatusMenu = false
+                                    },
+                                    trailingIcon = {
+                                        if (filter == doseStatusFilter) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = null
+                                            )
+                                        }
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -193,6 +266,56 @@ fun HistorialScreen(
             onDismiss = { detailRegistro = null },
             onRequestDelete = {
                 pendingDelete = detailRegistro
+            },
+            onRequestCreateTemplate = {
+                val current = detailRegistro ?: return@RegistroDetalleBottomSheet
+                plantillaRegistro = current
+                plantillaNombre = "Plantilla ${DateUtils.formatDateTime(current.registro.fecha)}"
+            },
+            onUpdateDoseStatus = { nuevoEstado ->
+                val current = detailRegistro ?: return@RegistroDetalleBottomSheet
+                onUpdateDoseStatus(current, nuevoEstado)
+            }
+        )
+    }
+
+    if (plantillaRegistro != null) {
+        AlertDialog(
+            onDismissRequest = { plantillaRegistro = null },
+            title = { Text("Crear plantilla") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Guarda este registro como plantilla reutilizable.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    OutlinedTextField(
+                        value = plantillaNombre,
+                        onValueChange = { plantillaNombre = it },
+                        label = { Text("Nombre de la plantilla") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val target = plantillaRegistro
+                        if (target != null) {
+                            viewModel.createPlantillaFromRegistro(target, plantillaNombre)
+                        }
+                        plantillaRegistro = null
+                    },
+                    enabled = plantillaNombre.trim().isNotBlank()
+                ) {
+                    Text("Guardar")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { plantillaRegistro = null }) {
+                    Text("Cancelar")
+                }
             }
         )
     }
@@ -339,6 +462,7 @@ private fun RegistroCard(
     onOpenDetail: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val estadoDosis = EstadoDosis.fromValue(registro.registro.dosisEstado)
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -351,15 +475,14 @@ private fun RegistroCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp)
+                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                val ratioText = buildRatioText(registro)
-
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
@@ -377,57 +500,49 @@ private fun RegistroCard(
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    DoseStatusBadge(estado = estadoDosis)
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (!ratioText.isNullOrBlank()) {
-                        Text(
-                            text = ratioText,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-                    IconButton(onClick = onDelete) {
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = "Eliminar",
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.height(18.dp)
-                        )
-                    }
+                IconButton(onClick = onDelete) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Eliminar",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.height(18.dp)
+                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            registro.items.forEach { item ->
-                Row(
-                    modifier = Modifier.padding(vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Default.Restaurant,
-                        contentDescription = null,
-                        modifier = Modifier.height(12.dp),
-                        tint = MaterialTheme.colorScheme.outline
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "${item.alimento.nombre}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "(${item.item.gramosConsumidos.toInt()}g)",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+            if (registro.items.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    registro.items.forEach { item ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Restaurant,
+                                contentDescription = null,
+                                modifier = Modifier.height(12.dp),
+                                tint = MaterialTheme.colorScheme.outline
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "${item.alimento.nombre}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "(${item.item.gramosConsumidos.toInt()}g)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
             }
 
             if (!registro.registro.notas.isNullOrBlank()) {
-                Spacer(modifier = Modifier.height(4.dp))
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     shape = RoundedCornerShape(8.dp),
@@ -442,9 +557,6 @@ private fun RegistroCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Resumen de datos
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -471,33 +583,6 @@ private fun RegistroCard(
                     isMain = true
                 )
             }
-
-            val glucosaAntes = registro.registro.glucosaAntesMgdl
-            val glucosaDespues = registro.registro.glucosaDespues2hMgdl
-            if (glucosaAntes != null || glucosaDespues != null) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    GlucosaInfo(
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(end = 8.dp),
-                        label = "Antes",
-                        value = glucosaAntes?.toString() ?: "—",
-                        alignEnd = false
-                    )
-                    GlucosaInfo(
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(start = 8.dp),
-                        label = "2h después",
-                        value = glucosaDespues?.toString() ?: "Pendiente",
-                        alignEnd = true
-                    )
-                }
-            }
         }
     }
 }
@@ -507,7 +592,9 @@ private fun RegistroCard(
 private fun RegistroDetalleBottomSheet(
     registro: RegistroComidaConItems,
     onDismiss: () -> Unit,
-    onRequestDelete: () -> Unit
+    onRequestDelete: () -> Unit,
+    onRequestCreateTemplate: () -> Unit,
+    onUpdateDoseStatus: (EstadoDosis) -> Unit
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -521,6 +608,7 @@ private fun RegistroDetalleBottomSheet(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            val estadoDosis = EstadoDosis.fromValue(registro.registro.dosisEstado)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -532,11 +620,28 @@ private fun RegistroDetalleBottomSheet(
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold
                     )
-                    Text(
-                        text = DateUtils.formatDateTime(registro.registro.fecha),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = DateUtils.formatDateTime(registro.registro.fecha),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (estadoDosis == EstadoDosis.APLICADA && registro.registro.dosisConfirmadaAt != null) {
+                            Text(
+                                text = " • ",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "Confirmada ${DateUtils.formatTime(registro.registro.dosisConfirmadaAt)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
                 IconButton(onClick = onDismiss) {
                     Icon(
@@ -552,6 +657,24 @@ private fun RegistroDetalleBottomSheet(
                     text = ratioText,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Estado de dosis",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                DoseStatusSelector(
+                    estado = estadoDosis,
+                    onStatusSelected = onUpdateDoseStatus
                 )
             }
 
@@ -658,12 +781,49 @@ private fun RegistroDetalleBottomSheet(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
+                TextButton(onClick = onRequestCreateTemplate) {
+                    Text("Crear plantilla")
+                }
                 TextButton(onClick = onRequestDelete) {
                     Text("Eliminar registro", color = MaterialTheme.colorScheme.error)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun DoseStatusBadge(
+    estado: EstadoDosis
+) {
+    val color = when (estado) {
+        EstadoDosis.PENDIENTE -> MaterialTheme.colorScheme.onSurfaceVariant
+        EstadoDosis.APLICADA -> MaterialTheme.colorScheme.primary
+        EstadoDosis.OMITIDA -> MaterialTheme.colorScheme.error
+    }
+
+    Surface(
+        color = color.copy(alpha = 0.14f),
+        shape = RoundedCornerShape(999.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = doseStatusIcon(estado),
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = estado.label,
+                style = MaterialTheme.typography.labelMedium,
+                color = color
+            )
         }
     }
 }
@@ -688,6 +848,75 @@ private fun StatDetailRow(
             fontWeight = FontWeight.SemiBold
         )
     }
+}
+
+@Composable
+private fun DoseStatusSelector(
+    estado: EstadoDosis,
+    onStatusSelected: (EstadoDosis) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val color = when (estado) {
+        EstadoDosis.PENDIENTE -> MaterialTheme.colorScheme.onSurfaceVariant
+        EstadoDosis.APLICADA -> MaterialTheme.colorScheme.primary
+        EstadoDosis.OMITIDA -> MaterialTheme.colorScheme.error
+    }
+
+    Box {
+        AssistChip(
+            onClick = { expanded = true },
+            label = { Text(estado.label) },
+            leadingIcon = {
+                Icon(
+                    imageVector = doseStatusIcon(estado),
+                    contentDescription = null
+                )
+            },
+            trailingIcon = {
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = null
+                )
+            },
+            colors = AssistChipDefaults.assistChipColors(
+                containerColor = color.copy(alpha = 0.14f),
+                labelColor = color,
+                leadingIconContentColor = color,
+                trailingIconContentColor = color
+            )
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            EstadoDosis.values().forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label) },
+                    onClick = {
+                        onStatusSelected(option)
+                        expanded = false
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = doseStatusIcon(option),
+                            contentDescription = null
+                        )
+                    },
+                    trailingIcon = {
+                        if (option == estado) {
+                            Icon(imageVector = Icons.Default.Check, contentDescription = null)
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
+private fun doseStatusIcon(estado: EstadoDosis) = when (estado) {
+    EstadoDosis.PENDIENTE -> Icons.Default.Schedule
+    EstadoDosis.APLICADA -> Icons.Default.CheckCircle
+    EstadoDosis.OMITIDA -> Icons.Default.Cancel
 }
 
 @Composable
@@ -819,32 +1048,5 @@ private fun buildItemMetricsText(
         withStyle(SpanStyle(color = InsulinaColor)) {
             append("$uText U")
         }
-    }
-}
-
-@Composable
-private fun GlucosaInfo(
-    modifier: Modifier = Modifier,
-    label: String,
-    value: String,
-    alignEnd: Boolean = false
-) {
-    val arrangement = if (alignEnd) Arrangement.End else Arrangement.Start
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = arrangement
-    ) {
-        Text(
-            text = "$label: ",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline
-        )
-        Text(
-            text = if (value != "—" && value != "Pend." && value != "Pendiente") "$value mg/dL" else value,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface
-        )
     }
 }

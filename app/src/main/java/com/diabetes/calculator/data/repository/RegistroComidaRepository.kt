@@ -3,6 +3,7 @@ package com.diabetes.calculator.data.repository
 import com.diabetes.calculator.data.dao.RegistroComidaConItems
 import com.diabetes.calculator.data.dao.RegistroComidaDao
 import com.diabetes.calculator.data.entity.AlimentoEnRegistro
+import com.diabetes.calculator.data.entity.EstadoDosis
 import com.diabetes.calculator.data.entity.RegistroComida
 import kotlinx.coroutines.flow.Flow
 
@@ -41,6 +42,18 @@ class RegistroComidaRepository(private val dao: RegistroComidaDao) {
      */
     suspend fun updateGlucosaAntes(registroId: Int, glucosa: Int) {
         dao.updateGlucosaAntes(registroId, glucosa)
+    }
+
+    suspend fun updateDosisEstado(
+        registroId: Int,
+        estado: EstadoDosis,
+        confirmadaAt: Long? = if (estado == EstadoDosis.APLICADA) System.currentTimeMillis() else null
+    ) {
+        dao.updateDosisEstado(
+            registroId = registroId,
+            estado = estado.value,
+            confirmadaAt = confirmadaAt
+        )
     }
 
     suspend fun sumHidratosInRange(start: Long, end: Long): Float =

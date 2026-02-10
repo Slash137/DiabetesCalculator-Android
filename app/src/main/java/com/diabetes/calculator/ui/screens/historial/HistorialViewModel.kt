@@ -4,6 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.diabetes.calculator.data.dao.RegistroComidaConItems
+import com.diabetes.calculator.data.entity.EstadoDosis
+import com.diabetes.calculator.data.entity.PlantillaItem
+import com.diabetes.calculator.data.repository.PlantillaRepository
 import com.diabetes.calculator.data.repository.RegistroComidaRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
@@ -27,11 +30,22 @@ enum class DayFilter(val label: String) {
     LAST_30_DAYS("30 días")
 }
 
+enum class DoseStatusFilter(
+    val label: String,
+    val value: EstadoDosis?
+) {
+    ALL("Todas", null),
+    PENDING("Pendiente", EstadoDosis.PENDIENTE),
+    APPLIED("Aplicada", EstadoDosis.APLICADA),
+    SKIPPED("No aplicada", EstadoDosis.OMITIDA)
+}
+
 /**
  * ViewModel para la pantalla de historial.
  */
 class HistorialViewModel(
-    private val repository: RegistroComidaRepository
+    private val repository: RegistroComidaRepository,
+    private val plantillaRepository: PlantillaRepository
 ) : ViewModel() {
     
     private val _uiState = MutableStateFlow<HistorialUiState>(HistorialUiState.Loading)
@@ -42,6 +56,9 @@ class HistorialViewModel(
 
     private val _dayFilter = MutableStateFlow(DayFilter.ALL)
     val dayFilter: StateFlow<DayFilter> = _dayFilter.asStateFlow()
+
+    private val _doseStatusFilter = MutableStateFlow(DoseStatusFilter.ALL)
+    val doseStatusFilter: StateFlow<DoseStatusFilter> = _doseStatusFilter.asStateFlow()
     
     init {
         observeRegistros()
@@ -50,19 +67,25 @@ class HistorialViewModel(
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun observeRegistros() {
         viewModelScope.launch {
-            combine(_searchQuery, _dayFilter) { query, filter ->
-                query to filter
-            }.flatMapLatest { (query, filter) ->
+            combine(_searchQuery, _dayFilter, _doseStatusFilter) { query, dayFilter, doseFilter ->
+                Triple(query, dayFilter, doseFilter)
+            }.flatMapLatest { (query, dayFilter, doseFilter) ->
                 val flow = if (query.isBlank()) {
                     repository.allRegistros
                 } else {
                     repository.searchRegistros(query)
                 }
-                flow.map { list -> applyDayFilter(list, filter) }
+                flow.map { list ->
+                    applyDoseStatusFilter(
+                        applyDayFilter(list, dayFilter),
+                        doseFilter
+                    )
+                }
             }.collect { list ->
                 val isAllFilter = _dayFilter.value == DayFilter.ALL
+                val isAllDoseFilter = _doseStatusFilter.value == DoseStatusFilter.ALL
                 _uiState.value = if (list.isEmpty()) {
-                    if (_searchQuery.value.isBlank() && isAllFilter) {
+                    if (_searchQuery.value.isBlank() && isAllFilter && isAllDoseFilter) {
                         HistorialUiState.Empty
                     } else {
                         HistorialUiState.Success(emptyList())
@@ -81,10 +104,41 @@ class HistorialViewModel(
     fun updateDayFilter(filter: DayFilter) {
         _dayFilter.value = filter
     }
+
+    fun updateDoseStatusFilter(filter: DoseStatusFilter) {
+        _doseStatusFilter.value = filter
+    }
     
     fun deleteRegistro(id: Int) {
         viewModelScope.launch {
             repository.deleteById(id)
+        }
+    }
+
+    fun updateDoseStatus(registroId: Int, status: EstadoDosis) {
+        viewModelScope.launch {
+            repository.updateDosisEstado(registroId, status)
+        }
+    }
+
+    fun createPlantillaFromRegistro(
+        registro: RegistroComidaConItems,
+        nombre: String
+    ) {
+        val cleanName = nombre.trim()
+        if (cleanName.isBlank()) return
+
+        val items = registro.items.map {
+            PlantillaItem(
+                plantillaId = 0,
+                alimentoId = it.item.alimentoId,
+                gramos = it.item.gramosConsumidos
+            )
+        }
+        if (items.isEmpty()) return
+
+        viewModelScope.launch {
+            plantillaRepository.insertPlantilla(cleanName, items)
         }
     }
 
@@ -108,12 +162,23 @@ class HistorialViewModel(
 
         return list.filter { it.registro.fecha in start..end }
     }
+
+    private fun applyDoseStatusFilter(
+        list: List<RegistroComidaConItems>,
+        filter: DoseStatusFilter
+    ): List<RegistroComidaConItems> {
+        val target = filter.value ?: return list
+        return list.filter { EstadoDosis.fromValue(it.registro.dosisEstado) == target }
+    }
     
-    class Factory(private val repository: RegistroComidaRepository) : ViewModelProvider.Factory {
+    class Factory(
+        private val repository: RegistroComidaRepository,
+        private val plantillaRepository: PlantillaRepository
+    ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(HistorialViewModel::class.java)) {
-                return HistorialViewModel(repository) as T
+                return HistorialViewModel(repository, plantillaRepository) as T
             }
             throw IllegalArgumentException("Clase de ViewModel desconocida")
         }

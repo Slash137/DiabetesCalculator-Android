@@ -85,6 +85,23 @@ interface RegistroComidaDao {
     """)
     suspend fun updateGlucosaAntes(registroId: Int, glucosa: Int)
 
+    @Query(
+        """
+        UPDATE registro_comida
+        SET dosisEstado = :estado,
+            dosisConfirmadaAt = CASE
+                WHEN :estado = 'applied' THEN :confirmadaAt
+                ELSE NULL
+            END
+        WHERE id = :registroId
+    """
+    )
+    suspend fun updateDosisEstado(
+        registroId: Int,
+        estado: String,
+        confirmadaAt: Long?
+    )
+
     @Query("SELECT IFNULL(SUM(hidratosTotales), 0) FROM registro_comida WHERE fecha BETWEEN :start AND :end")
     suspend fun sumHidratosInRange(start: Long, end: Long): Float
 

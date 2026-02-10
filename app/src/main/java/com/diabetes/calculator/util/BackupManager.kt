@@ -93,12 +93,15 @@ class BackupManager(
                     "ratio_u_g",
                     "glucosa_antes",
                     "glucosa_despues_2h",
+                    "dosis_estado",
+                    "dosis_confirmada_at",
                     "notas"
                 ).joinToString(";")
             )
 
             registros.forEach { registro ->
                 val fecha = dateFormat.format(registro.fecha)
+                val dosisConfirmada = registro.dosisConfirmadaAt?.let { dateFormat.format(it) } ?: ""
                 val ratio = registro.ratioInsulinaHc ?: if (registro.hidratosTotales > 0f) {
                     registro.unidadesInsulina / registro.hidratosTotales
                 } else {
@@ -120,6 +123,8 @@ class BackupManager(
                             formatFloat(ratio),
                             registro.glucosaAntesMgdl?.toString() ?: "",
                             registro.glucosaDespues2hMgdl?.toString() ?: "",
+                            registro.dosisEstado,
+                            dosisConfirmada,
                             registro.notas ?: ""
                         ).joinToString(";") { escapeCsv(it) }
                     )
@@ -139,6 +144,8 @@ class BackupManager(
                                 formatFloat(ratio),
                                 registro.glucosaAntesMgdl?.toString() ?: "",
                                 registro.glucosaDespues2hMgdl?.toString() ?: "",
+                                registro.dosisEstado,
+                                dosisConfirmada,
                                 registro.notas ?: ""
                             ).joinToString(";") { escapeCsv(it) }
                         )
