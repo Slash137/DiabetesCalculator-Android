@@ -402,6 +402,7 @@ fun DiabetesNavGraph(app: DiabetesApp) {
                         )
                         NuevaComidaScreen(
                             viewModel = viewModel,
+                            currentGlucoseMgdl = (nsState as? NightscoutUiState.Success)?.entry?.sgv,
                             tabChangeSignal = pagerState.currentPage,
                             onNavigateToProfile = {
                                 coroutineScope.launch {

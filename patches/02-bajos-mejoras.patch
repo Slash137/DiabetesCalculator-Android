@@ -1,0 +1,158 @@
+diff --git a/README.md b/README.md
+index 2fc3d0b..d0ff206 100644
+--- a/README.md
++++ b/README.md
+@@ -74,7 +74,8 @@ Aplicación Android para el cálculo de hidratos, raciones e insulina rápida, c
+ 
+ ## Datos iniciales
+ 
+-- `alimentos_librito.csv` se usa como semilla para la base de datos de alimentos.
++- `alimentos_librito.csv` se incluye como referencia/fuente del dataset.
++- La semilla Android actual se carga desde código en `populateDatabase()` para mantener inserciones idempotentes.
+ - La app actualiza o inserta alimentos de forma idempotente.
+ 
+ ## Construcción y ejecución
+@@ -82,13 +83,15 @@ Aplicación Android para el cálculo de hidratos, raciones e insulina rápida, c
+ Requisitos:
+ 
+ - Android Studio (Iguana o superior recomendado).
+-- JDK 17.
++- JDK 17 (recomendado para build/lint).
+ - Android SDK 34.
+ 
+ Comandos útiles:
+ 
+ - `./gradlew assembleDebug`
+ - `./gradlew :app:compileDebugKotlin`
++- `./gradlew testDebugUnitTest`
++- `./gradlew lintDebug` (ejecutar con JDK 17)
+ 
+ ## Estructura del proyecto (resumen)
+ 
+diff --git a/app/src/main/java/com/diabetes/calculator/data/repository/NightscoutRepository.kt b/app/src/main/java/com/diabetes/calculator/data/repository/NightscoutRepository.kt
+index c1bb481..647e929 100644
+--- a/app/src/main/java/com/diabetes/calculator/data/repository/NightscoutRepository.kt
++++ b/app/src/main/java/com/diabetes/calculator/data/repository/NightscoutRepository.kt
+@@ -36,6 +36,9 @@ class NightscoutRepository {
+     
+     private var currentUrl: String? = null
+     private var api: NightscoutApi? = null
++    @Volatile
++    var lastErrorMessage: String? = null
++        private set
+     
+     private fun getClient(): OkHttpClient {
+         return OkHttpClient.Builder()
+@@ -64,9 +67,10 @@ class NightscoutRepository {
+             }
+             
+             val entries = api?.getRecentEntries(count = 1, token = token)
++            lastErrorMessage = null
+             return entries?.firstOrNull()
+         } catch (e: Exception) {
+-            e.printStackTrace()
++            lastErrorMessage = formatError(e)
+             return null
+         }
+     }
+@@ -96,10 +100,11 @@ class NightscoutRepository {
+             val from = targetMillis - toleranceMs
+             val to = targetMillis + toleranceMs
+             val entries = api?.getEntriesInRange(from = from, to = to, count = 50, token = token)
++            lastErrorMessage = null
+             return entries
+                 ?.minByOrNull { kotlin.math.abs(it.date - targetMillis) }
+         } catch (e: Exception) {
+-            e.printStackTrace()
++            lastErrorMessage = formatError(e)
+             return null
+         }
+     }
+@@ -147,10 +152,16 @@ class NightscoutRepository {
+                 skip += page.size
+             }
+ 
++            lastErrorMessage = null
+             all.sortedBy { it.date }
+         } catch (e: Exception) {
+-            e.printStackTrace()
++            lastErrorMessage = formatError(e)
+             emptyList()
+         }
+     }
++
++    private fun formatError(e: Exception): String {
++        val detail = e.message?.takeIf { it.isNotBlank() } ?: "sin detalle"
++        return "${e.javaClass.simpleName}: $detail"
++    }
+ }
+diff --git a/app/src/main/java/com/diabetes/calculator/data/repository/RegistroRepository.kt b/app/src/main/java/com/diabetes/calculator/data/repository/RegistroRepository.kt
+deleted file mode 100644
+index 779fb31..0000000
+--- a/app/src/main/java/com/diabetes/calculator/data/repository/RegistroRepository.kt
++++ /dev/null
+@@ -1,36 +0,0 @@
+-package com.diabetes.calculator.data.repository
+-
+-import com.diabetes.calculator.data.dao.RegistroComidaConItems
+-import com.diabetes.calculator.data.dao.RegistroComidaDao
+-import com.diabetes.calculator.data.entity.AlimentoEnRegistro
+-import com.diabetes.calculator.data.entity.RegistroComida
+-import kotlinx.coroutines.flow.Flow
+-
+-/**
+- * Repositorio para registros de comida.
+- * Abstrae el acceso a datos del DAO.
+- */
+-class RegistroRepository(private val dao: RegistroComidaDao) {
+-
+-    /**
+-     * Obtiene todos los registros con sus items.
+-     */
+-    val registros: Flow<List<RegistroComidaConItems>> = dao.getAllWithItems()
+-
+-    /**
+-     * Inserta un nuevo registro de comida completo.
+-     */
+-    suspend fun insertRegistroCompleto(registro: RegistroComida, items: List<AlimentoEnRegistro>) {
+-        dao.insertRegistroCompleto(registro, items)
+-    }
+-
+-    /**
+-     * Elimina un registro por su ID.
+-     */
+-    suspend fun deleteById(id: Int) = dao.deleteById(id)
+-
+-    /**
+-     * Obtiene registros por búsqueda.
+-     */
+-    fun searchRegistros(query: String): Flow<List<RegistroComidaConItems>> = dao.search(query)
+-}
+diff --git a/app/src/main/java/com/diabetes/calculator/ui/screens/perfil/PerfilScreen.kt b/app/src/main/java/com/diabetes/calculator/ui/screens/perfil/PerfilScreen.kt
+index 95f776a..1bf7959 100644
+--- a/app/src/main/java/com/diabetes/calculator/ui/screens/perfil/PerfilScreen.kt
++++ b/app/src/main/java/com/diabetes/calculator/ui/screens/perfil/PerfilScreen.kt
+@@ -831,6 +831,8 @@ private fun PerfilContent(
+                         label = { Text("Token de API (opcional)") },
+                         modifier = Modifier.fillMaxWidth(),
+                         singleLine = true,
++                        visualTransformation = PasswordVisualTransformation(),
++                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                         enabled = !isSaving,
+                         shape = RoundedCornerShape(12.dp)
+                     )
+diff --git a/app/src/main/java/com/diabetes/calculator/work/NightscoutRetryWorker.kt b/app/src/main/java/com/diabetes/calculator/work/NightscoutRetryWorker.kt
+index d577054..f85ad0d 100644
+--- a/app/src/main/java/com/diabetes/calculator/work/NightscoutRetryWorker.kt
++++ b/app/src/main/java/com/diabetes/calculator/work/NightscoutRetryWorker.kt
+@@ -67,7 +67,9 @@ class NightscoutRetryWorker(
+                     pendingDao.update(
+                         item.copy(
+                             attempts = nextAttempts,
+-                            lastError = errorMessage ?: "Sin datos"
++                            lastError = errorMessage
++                                ?: nightscoutRepo.lastErrorMessage
++                                ?: "Sin datos"
+                         )
+                     )
+                 }

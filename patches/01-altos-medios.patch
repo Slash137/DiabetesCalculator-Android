@@ -1,0 +1,304 @@
+diff --git a/app/src/main/java/com/diabetes/calculator/data/database/AppDatabase.kt b/app/src/main/java/com/diabetes/calculator/data/database/AppDatabase.kt
+index 9bd3c01..ccbd61b 100644
+--- a/app/src/main/java/com/diabetes/calculator/data/database/AppDatabase.kt
++++ b/app/src/main/java/com/diabetes/calculator/data/database/AppDatabase.kt
+@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
+ 
+ /**
+  * Base de datos Room principal de la aplicacion.
+- * Version 8 con fallback destructivo solo en debug.
++ * Version 9 con fallback destructivo solo en debug.
+  */
+ @Database(
+     entities = [
+@@ -37,7 +37,7 @@ import kotlinx.coroutines.launch
+         PlantillaItem::class,
+         PendingGlucose::class
+     ],
+-    version = 8,
++    version = 9,
+     exportSchema = false
+ )
+ abstract class AppDatabase : RoomDatabase() {
+@@ -63,7 +63,13 @@ abstract class AppDatabase : RoomDatabase() {
+                     AppDatabase::class.java,
+                     "diabetes_calculator_db"
+                 )
+-                builder.addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
++                builder.addMigrations(
++                    MIGRATION_4_5,
++                    MIGRATION_5_6,
++                    MIGRATION_6_7,
++                    MIGRATION_7_8,
++                    MIGRATION_8_9
++                )
+                 if (BuildConfig.DEBUG) {
+                     builder.fallbackToDestructiveMigration(dropAllTables = true)
+                 }
+@@ -150,6 +156,39 @@ abstract class AppDatabase : RoomDatabase() {
+                 )
+             }
+         }
++
++        private val MIGRATION_8_9 = object : Migration(8, 9) {
++            override fun migrate(database: SupportSQLiteDatabase) {
++                database.execSQL(
++                    """
++                    CREATE TABLE IF NOT EXISTS alimento_en_registro_new (
++                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
++                        registroId INTEGER NOT NULL,
++                        alimentoId INTEGER NOT NULL,
++                        gramosConsumidos REAL NOT NULL,
++                        hidratosCalculados REAL NOT NULL,
++                        FOREIGN KEY(registroId) REFERENCES registro_comida(id) ON DELETE CASCADE,
++                        FOREIGN KEY(alimentoId) REFERENCES alimentos(id) ON DELETE NO ACTION
++                    )
++                    """.trimIndent()
++                )
++                database.execSQL(
++                    """
++                    INSERT INTO alimento_en_registro_new (id, registroId, alimentoId, gramosConsumidos, hidratosCalculados)
++                    SELECT id, registroId, alimentoId, gramosConsumidos, hidratosCalculados
++                    FROM alimento_en_registro
++                    """.trimIndent()
++                )
++                database.execSQL("DROP TABLE alimento_en_registro")
++                database.execSQL("ALTER TABLE alimento_en_registro_new RENAME TO alimento_en_registro")
++                database.execSQL(
++                    "CREATE INDEX IF NOT EXISTS index_alimento_en_registro_registroId ON alimento_en_registro(registroId)"
++                )
++                database.execSQL(
++                    "CREATE INDEX IF NOT EXISTS index_alimento_en_registro_alimentoId ON alimento_en_registro(alimentoId)"
++                )
++            }
++        }
+     }
+     
+     /**
+diff --git a/app/src/main/java/com/diabetes/calculator/data/entity/AlimentoEnRegistro.kt b/app/src/main/java/com/diabetes/calculator/data/entity/AlimentoEnRegistro.kt
+index c536911..54e71fe 100644
+--- a/app/src/main/java/com/diabetes/calculator/data/entity/AlimentoEnRegistro.kt
++++ b/app/src/main/java/com/diabetes/calculator/data/entity/AlimentoEnRegistro.kt
+@@ -29,7 +29,7 @@ import kotlinx.serialization.Serializable
+             entity = Alimento::class,
+             parentColumns = ["id"],
+             childColumns = ["alimentoId"],
+-            onDelete = ForeignKey.CASCADE
++            onDelete = ForeignKey.NO_ACTION
+         )
+     ],
+     indices = [
+diff --git a/app/src/main/java/com/diabetes/calculator/ui/screens/alimentos/AlimentosScreen.kt b/app/src/main/java/com/diabetes/calculator/ui/screens/alimentos/AlimentosScreen.kt
+index f405239..d10e7cf 100644
+--- a/app/src/main/java/com/diabetes/calculator/ui/screens/alimentos/AlimentosScreen.kt
++++ b/app/src/main/java/com/diabetes/calculator/ui/screens/alimentos/AlimentosScreen.kt
+@@ -31,9 +31,12 @@ import androidx.compose.material3.Icon
+ import androidx.compose.material3.IconButton
+ import androidx.compose.material3.MaterialTheme
+ import androidx.compose.material3.OutlinedTextField
++import androidx.compose.material3.SnackbarHost
++import androidx.compose.material3.SnackbarHostState
+ import androidx.compose.material3.Text
+ import androidx.compose.material3.TextButton
+ import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
+ import androidx.compose.runtime.collectAsState
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.mutableStateOf
+@@ -60,6 +63,13 @@ fun AlimentosScreen(
+     val showDialog by viewModel.showDialog.collectAsState()
+     val searchQuery by viewModel.searchQuery.collectAsState()
+     var pendingDelete by remember { mutableStateOf<Alimento?>(null) }
++    val snackbarHostState = remember { SnackbarHostState() }
++
++    LaunchedEffect(Unit) {
++        viewModel.uiEvents.collect { message ->
++            snackbarHostState.showSnackbar(message)
++        }
++    }
+     
+     Box(modifier = Modifier.fillMaxSize()) {
+         Box(
+@@ -136,6 +146,13 @@ fun AlimentosScreen(
+         if (showDialog) {
+             AlimentoDialog(viewModel = viewModel)
+         }
++
++        SnackbarHost(
++            hostState = snackbarHostState,
++            modifier = Modifier
++                .align(Alignment.BottomCenter)
++                .padding(bottom = 8.dp)
++        )
+     }
+ 
+     if (pendingDelete != null) {
+@@ -306,6 +323,8 @@ private fun AlimentoDialog(viewModel: AlimentosViewModel) {
+     val nota by viewModel.dialogNota.collectAsState()
+     
+     val isEditing = editingAlimento != null
++    val canSave = nombre.isNotBlank() &&
++        ((hidratos.trim().replace(',', '.').toFloatOrNull() ?: -1f) >= 0f)
+     
+     AlertDialog(
+         onDismissRequest = viewModel::closeDialog,
+@@ -357,7 +376,7 @@ private fun AlimentoDialog(viewModel: AlimentosViewModel) {
+         confirmButton = {
+             TextButton(
+                 onClick = viewModel::saveAlimento,
+-                enabled = nombre.isNotBlank() && hidratos.toFloatOrNull() != null
++                enabled = canSave
+             ) {
+                 Text("Guardar")
+             }
+diff --git a/app/src/main/java/com/diabetes/calculator/ui/screens/alimentos/AlimentosViewModel.kt b/app/src/main/java/com/diabetes/calculator/ui/screens/alimentos/AlimentosViewModel.kt
+index e5c1f8f..4527dbd 100644
+--- a/app/src/main/java/com/diabetes/calculator/ui/screens/alimentos/AlimentosViewModel.kt
++++ b/app/src/main/java/com/diabetes/calculator/ui/screens/alimentos/AlimentosViewModel.kt
+@@ -6,9 +6,12 @@ import androidx.lifecycle.viewModelScope
+ import com.diabetes.calculator.data.entity.Alimento
+ import com.diabetes.calculator.data.repository.AlimentoRepository
+ import kotlinx.coroutines.ExperimentalCoroutinesApi
++import kotlinx.coroutines.flow.MutableSharedFlow
+ import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.SharedFlow
+ import kotlinx.coroutines.flow.StateFlow
+ import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.flow.asSharedFlow
+ import kotlinx.coroutines.flow.flatMapLatest
+ import kotlinx.coroutines.launch
+ 
+@@ -54,6 +57,9 @@ class AlimentosViewModel(
+     // Estado de búsqueda
+     private val _searchQuery = MutableStateFlow("")
+     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
++
++    private val _uiEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
++    val uiEvents: SharedFlow<String> = _uiEvents.asSharedFlow()
+     
+     init {
+         observeAlimentos()
+@@ -144,6 +150,7 @@ class AlimentosViewModel(
+         val nota = _dialogNota.value.trim().ifEmpty { null }
+         
+         if (nombre.isEmpty() || hidratos == null || hidratos < 0) {
++            _uiEvents.tryEmit("Completa los campos del alimento correctamente")
+             return
+         }
+         
+@@ -179,7 +186,17 @@ class AlimentosViewModel(
+      */
+     fun deleteAlimento(alimento: Alimento) {
+         viewModelScope.launch {
+-            repository.delete(alimento)
++            try {
++                repository.delete(alimento)
++            } catch (e: Exception) {
++                val isForeignKeyError = e.message?.contains("FOREIGN KEY", ignoreCase = true) == true
++                val message = if (isForeignKeyError) {
++                    "No se puede eliminar: el alimento está en registros guardados"
++                } else {
++                    "No se pudo eliminar el alimento"
++                }
++                _uiEvents.tryEmit(message)
++            }
+         }
+     }
+     
+diff --git a/app/src/main/java/com/diabetes/calculator/ui/screens/nuevacomida/NuevaComidaViewModel.kt b/app/src/main/java/com/diabetes/calculator/ui/screens/nuevacomida/NuevaComidaViewModel.kt
+index 3d5d896..9cac455 100644
+--- a/app/src/main/java/com/diabetes/calculator/ui/screens/nuevacomida/NuevaComidaViewModel.kt
++++ b/app/src/main/java/com/diabetes/calculator/ui/screens/nuevacomida/NuevaComidaViewModel.kt
+@@ -248,9 +248,17 @@ class NuevaComidaViewModel(
+     private fun recalculate() {
+         val profile = cachedProfile ?: return
+         val totalHidratos = _items.value.sumOf { it.hidratos.toDouble() }.toFloat()
+-        
+-        val raciones = totalHidratos / profile.gramosPorRacion
+-        val insulina = raciones * profile.ratioInsulina
++
++        val raciones = if (profile.gramosPorRacion > 0f) {
++            totalHidratos / profile.gramosPorRacion
++        } else {
++            0f
++        }
++        val insulina = if (profile.ratioInsulina > 0f) {
++            raciones * profile.ratioInsulina
++        } else {
++            0f
++        }
+         // Redondear insulina al 0,5 más cercano
+         val insulinaRedondeada = Math.round(insulina * 2) / 2f
+         
+@@ -262,8 +270,11 @@ class NuevaComidaViewModel(
+     }
+     
+     fun canSave(): Boolean {
+-        return _items.value.any { it.alimento != null && (parseDecimal(it.gramosStr) ?: 0f) > 0f } &&
+-               cachedProfile != null
++        val profile = cachedProfile ?: return false
++        if (profile.gramosPorRacion <= 0f || profile.ratioInsulina <= 0f) {
++            return false
++        }
++        return _items.value.any { it.alimento != null && (parseDecimal(it.gramosStr) ?: 0f) > 0f }
+     }
+     
+     fun saveRegistro() {
+@@ -274,15 +285,19 @@ class NuevaComidaViewModel(
+         viewModelScope.launch {
+             _isSaving.value = true
+             try {
++                if (profile.gramosPorRacion <= 0f || profile.ratioInsulina <= 0f) {
++                    _uiEvents.tryEmit("Configura un perfil válido antes de guardar")
++                    return@launch
++                }
+                 if (validItems.isEmpty()) {
+-                    _uiState.value = NuevaComidaUiState.Error("Añade al menos un alimento válido")
++                    _uiEvents.tryEmit("Añade al menos un alimento válido")
+                     return@launch
+                 }
+                 if (calc.hidratosTotales.isNaN() || calc.hidratosTotales.isInfinite() ||
+                     calc.raciones.isNaN() || calc.raciones.isInfinite() ||
+                     calc.unidadesInsulina.isNaN() || calc.unidadesInsulina.isInfinite()
+                 ) {
+-                    _uiState.value = NuevaComidaUiState.Error("Cálculo inválido. Revisa los datos introducidos")
++                    _uiEvents.tryEmit("Cálculo inválido. Revisa los datos introducidos")
+                     return@launch
+                 }
+ 
+@@ -342,14 +357,14 @@ class NuevaComidaViewModel(
+                     scheduleNightscoutRetry()
+                 }
+ 
+-                val alertMsg = buildObjetivoAlert(calc)
++                val alertMsg = buildObjetivoAlert()
+                 if (alertMsg != null) {
+                     _uiEvents.tryEmit(alertMsg)
+                 }
+                 _saveSuccess.value = true
+                 resetForm()
+             } catch (e: Exception) {
+-                _uiState.value = NuevaComidaUiState.Error("Error al guardar: ${e.message}")
++                _uiEvents.tryEmit("Error al guardar: ${e.message ?: "desconocido"}")
+             } finally {
+                 _isSaving.value = false
+             }
+@@ -379,14 +394,14 @@ class NuevaComidaViewModel(
+         }
+     }
+ 
+-    private suspend fun buildObjetivoAlert(calc: CalculoActual): String? {
++    private suspend fun buildObjetivoAlert(): String? {
+         val profile = cachedProfile ?: return null
+         val start = DateUtils.getStartOfToday()
+         val end = DateUtils.getEndOfToday()
+ 
+-        val hidratosTotales = registroRepository.sumHidratosInRange(start, end) + calc.hidratosTotales
+-        val racionesTotales = registroRepository.sumRacionesInRange(start, end) + calc.raciones
+-        val insulinaTotal = registroRepository.sumInsulinaInRange(start, end) + calc.unidadesInsulina
++        val hidratosTotales = registroRepository.sumHidratosInRange(start, end)
++        val racionesTotales = registroRepository.sumRacionesInRange(start, end)
++        val insulinaTotal = registroRepository.sumInsulinaInRange(start, end)
+ 
+         val mensajes = mutableListOf<String>()
+         profile.objetivoHidratosDia?.takeIf { it > 0f }?.let { objetivo ->

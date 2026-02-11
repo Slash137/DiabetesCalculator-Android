@@ -56,6 +56,13 @@ class RegistroComidaRepository(private val dao: RegistroComidaDao) {
         )
     }
 
+    suspend fun updateDosisCorreccion(
+        registroId: Int,
+        conCorreccion: Boolean?
+    ) {
+        dao.updateDosisCorreccion(registroId, conCorreccion)
+    }
+
     suspend fun sumHidratosInRange(start: Long, end: Long): Float =
         dao.sumHidratosInRange(start, end)
 

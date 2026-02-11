@@ -102,6 +102,8 @@ fun PerfilScreen(
     val objetivoHidratosDia by viewModel.objetivoHidratosDia.collectAsState()
     val objetivoRacionesDia by viewModel.objetivoRacionesDia.collectAsState()
     val objetivoInsulinaDia by viewModel.objetivoInsulinaDia.collectAsState()
+    val glucosaObjetivoMgdl by viewModel.glucosaObjetivoMgdl.collectAsState()
+    val factorCorreccionMgdlPorU by viewModel.factorCorreccionMgdlPorU.collectAsState()
     val recordatorio2hActivo by viewModel.recordatorio2hActivo.collectAsState()
     val nightscoutUrl by viewModel.nightscoutUrl.collectAsState()
     val nightscoutToken by viewModel.nightscoutToken.collectAsState()
@@ -415,6 +417,8 @@ fun PerfilScreen(
                     objetivoHidratosDia = objetivoHidratosDia,
                     objetivoRacionesDia = objetivoRacionesDia,
                     objetivoInsulinaDia = objetivoInsulinaDia,
+                    glucosaObjetivoMgdl = glucosaObjetivoMgdl,
+                    factorCorreccionMgdlPorU = factorCorreccionMgdlPorU,
                     recordatorio2hActivo = recordatorio2hActivo,
                     isSaving = isSaving,
                     isNewProfile = uiState is PerfilUiState.Empty,
@@ -424,6 +428,8 @@ fun PerfilScreen(
                     onObjetivoHidratosDiaChange = viewModel::updateObjetivoHidratosDia,
                     onObjetivoRacionesDiaChange = viewModel::updateObjetivoRacionesDia,
                     onObjetivoInsulinaDiaChange = viewModel::updateObjetivoInsulinaDia,
+                    onGlucosaObjetivoMgdlChange = viewModel::updateGlucosaObjetivoMgdl,
+                    onFactorCorreccionMgdlPorUChange = viewModel::updateFactorCorreccionMgdlPorU,
                     onRecordatorio2hChange = onRecordatorio2hChange@{ enabled ->
                         if (enabled && android.os.Build.VERSION.SDK_INT >= 33) {
                             val granted = ContextCompat.checkSelfPermission(
@@ -499,6 +505,8 @@ private fun PerfilContent(
     objetivoHidratosDia: String,
     objetivoRacionesDia: String,
     objetivoInsulinaDia: String,
+    glucosaObjetivoMgdl: String,
+    factorCorreccionMgdlPorU: String,
     recordatorio2hActivo: Boolean,
     isSaving: Boolean,
     isNewProfile: Boolean,
@@ -508,6 +516,8 @@ private fun PerfilContent(
     onObjetivoHidratosDiaChange: (String) -> Unit,
     onObjetivoRacionesDiaChange: (String) -> Unit,
     onObjetivoInsulinaDiaChange: (String) -> Unit,
+    onGlucosaObjetivoMgdlChange: (String) -> Unit,
+    onFactorCorreccionMgdlPorUChange: (String) -> Unit,
     onRecordatorio2hChange: (Boolean) -> Unit,
     onSave: () -> Unit,
     canSave: Boolean,
@@ -711,6 +721,78 @@ private fun PerfilContent(
                                 hidratosField(Modifier.fillMaxWidth())
                                 racionesField(Modifier.fillMaxWidth())
                                 insulinaField(Modifier.fillMaxWidth())
+                            }
+                        }
+                    }
+                }
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer
+                ),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Corrección por glucosa",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Opcional. Se aplicará solo con Nightscout y ambos campos completos.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    BoxWithConstraints {
+                        val isWide = maxWidth >= 520.dp
+                        val spacing = 12.dp
+                        val objetivoField: @Composable (Modifier) -> Unit = { modifier ->
+                            OutlinedTextField(
+                                value = glucosaObjetivoMgdl,
+                                onValueChange = onGlucosaObjetivoMgdlChange,
+                                label = { Text("Glucosa objetivo") },
+                                placeholder = { Text("Ej: 110") },
+                                modifier = modifier,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                enabled = !isSaving,
+                                shape = RoundedCornerShape(12.dp),
+                                suffix = { Text("mg/dL") }
+                            )
+                        }
+                        val factorField: @Composable (Modifier) -> Unit = { modifier ->
+                            OutlinedTextField(
+                                value = factorCorreccionMgdlPorU,
+                                onValueChange = onFactorCorreccionMgdlPorUChange,
+                                label = { Text("Factor de corrección") },
+                                placeholder = { Text("Ej: 50") },
+                                modifier = modifier,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                singleLine = true,
+                                enabled = !isSaving,
+                                shape = RoundedCornerShape(12.dp),
+                                suffix = { Text("mg/dL por U") }
+                            )
+                        }
+
+                        if (isWide) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(spacing)
+                            ) {
+                                objetivoField(Modifier.weight(1f))
+                                factorField(Modifier.weight(1f))
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
+                                objetivoField(Modifier.fillMaxWidth())
+                                factorField(Modifier.fillMaxWidth())
                             }
                         }
                     }

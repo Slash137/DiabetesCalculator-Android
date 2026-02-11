@@ -83,6 +83,7 @@ import java.util.Locale
 fun NuevaComidaScreen(
     viewModel: NuevaComidaViewModel,
     onNavigateToProfile: () -> Unit = {},
+    currentGlucoseMgdl: Int? = null,
     tabChangeSignal: Int = 0
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -131,6 +132,10 @@ fun NuevaComidaScreen(
 
     LaunchedEffect(tabChangeSignal) {
         snackbarHostState.currentSnackbarData?.dismiss()
+    }
+
+    LaunchedEffect(currentGlucoseMgdl) {
+        viewModel.updateGlucosaActual(currentGlucoseMgdl)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -444,6 +449,30 @@ private fun NuevaComidaContent(
                             )
                         }
                     }
+
+                    val glucosaActual = calculo.glucosaUsadaMgdl
+                    if (glucosaActual != null) {
+                        Text(
+                            text = "Glucosa actual usada: $glucosaActual mg/dL",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    if (kotlin.math.abs(calculo.unidadesCorreccion) >= 0.05f) {
+                        val signo = if (calculo.unidadesCorreccion >= 0f) "+" else ""
+                        Text(
+                            text = "Corrección por glucosa: $signo${String.format("%.1f", calculo.unidadesCorreccion)} U",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Text(
+                        text = "Insulina por comida (sin corrección): ${String.format("%.1f", calculo.unidadesComida)} U",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
                     Button(
                         onClick = onSave,

@@ -89,6 +89,10 @@ interface RegistroComidaDao {
         """
         UPDATE registro_comida
         SET dosisEstado = :estado,
+            dosisConCorreccion = CASE
+                WHEN :estado = 'applied' THEN dosisConCorreccion
+                ELSE NULL
+            END,
             dosisConfirmadaAt = CASE
                 WHEN :estado = 'applied' THEN :confirmadaAt
                 ELSE NULL
@@ -100,6 +104,21 @@ interface RegistroComidaDao {
         registroId: Int,
         estado: String,
         confirmadaAt: Long?
+    )
+
+    @Query(
+        """
+        UPDATE registro_comida
+        SET dosisConCorreccion = CASE
+            WHEN dosisEstado = 'applied' THEN :conCorreccion
+            ELSE NULL
+        END
+        WHERE id = :registroId
+    """
+    )
+    suspend fun updateDosisCorreccion(
+        registroId: Int,
+        conCorreccion: Boolean?
     )
 
     @Query("SELECT IFNULL(SUM(hidratosTotales), 0) FROM registro_comida WHERE fecha BETWEEN :start AND :end")

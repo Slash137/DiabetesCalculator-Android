@@ -121,6 +121,12 @@ class HistorialViewModel(
         }
     }
 
+    fun updateDoseCorrection(registroId: Int, conCorreccion: Boolean?) {
+        viewModelScope.launch {
+            repository.updateDosisCorreccion(registroId, conCorreccion)
+        }
+    }
+
     fun createPlantillaFromRegistro(
         registro: RegistroComidaConItems,
         nombre: String

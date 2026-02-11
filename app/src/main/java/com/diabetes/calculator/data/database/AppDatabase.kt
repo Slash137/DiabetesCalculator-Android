@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Base de datos Room principal de la aplicacion.
- * Version 9 con fallback destructivo solo en debug.
+ * Version 11 con fallback destructivo solo en debug.
  */
 @Database(
     entities = [
@@ -37,7 +37,7 @@ import kotlinx.coroutines.launch
         PlantillaItem::class,
         PendingGlucose::class
     ],
-    version = 9,
+    version = 11,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -68,7 +68,9 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_5_6,
                     MIGRATION_6_7,
                     MIGRATION_7_8,
-                    MIGRATION_8_9
+                    MIGRATION_8_9,
+                    MIGRATION_9_10,
+                    MIGRATION_10_11
                 )
                 if (BuildConfig.DEBUG) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -187,6 +189,19 @@ abstract class AppDatabase : RoomDatabase() {
                 database.execSQL(
                     "CREATE INDEX IF NOT EXISTS index_alimento_en_registro_alimentoId ON alimento_en_registro(alimentoId)"
                 )
+            }
+        }
+
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN glucosaObjetivoMgdl INTEGER")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorCorreccionMgdlPorU REAL")
+            }
+        }
+
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE registro_comida ADD COLUMN dosisConCorreccion INTEGER")
             }
         }
     }

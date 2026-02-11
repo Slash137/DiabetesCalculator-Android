@@ -60,7 +60,10 @@ sealed class NuevaComidaUiState {
 data class CalculoActual(
     val hidratosTotales: Float = 0f,
     val raciones: Float = 0f,
-    val unidadesInsulina: Float = 0f
+    val unidadesComida: Float = 0f,
+    val unidadesCorreccion: Float = 0f,
+    val unidadesInsulina: Float = 0f,
+    val glucosaUsadaMgdl: Int? = null
 )
 
 /**
@@ -102,6 +105,8 @@ class NuevaComidaViewModel(
     // Cálculo total
     private val _calculo = MutableStateFlow(CalculoActual())
     val calculo: StateFlow<CalculoActual> = _calculo.asStateFlow()
+
+    private val _glucosaActualMgdl = MutableStateFlow<Int?>(null)
     
     // Estados de UI auxiliares
     private val _isSaving = MutableStateFlow(false)
@@ -149,6 +154,16 @@ class NuevaComidaViewModel(
     
     fun updateSearchQuery(query: String) {
         _searchQuery.value = query
+    }
+
+    fun updateGlucosaActual(glucosaMgdl: Int?) {
+        if (glucosaMgdl == null) {
+            val nightscoutConfigured = !cachedProfile?.nightscoutUrl.isNullOrBlank()
+            if (nightscoutConfigured) return
+        }
+        if (_glucosaActualMgdl.value == glucosaMgdl) return
+        _glucosaActualMgdl.value = glucosaMgdl
+        recalculate()
     }
     
     fun updateNotas(notas: String) {
@@ -248,24 +263,10 @@ class NuevaComidaViewModel(
     private fun recalculate() {
         val profile = cachedProfile ?: return
         val totalHidratos = _items.value.sumOf { it.hidratos.toDouble() }.toFloat()
-
-        val raciones = if (profile.gramosPorRacion > 0f) {
-            totalHidratos / profile.gramosPorRacion
-        } else {
-            0f
-        }
-        val insulina = if (profile.ratioInsulina > 0f) {
-            raciones * profile.ratioInsulina
-        } else {
-            0f
-        }
-        // Redondear insulina al 0,5 más cercano
-        val insulinaRedondeada = Math.round(insulina * 2) / 2f
-        
-        _calculo.value = CalculoActual(
-            hidratosTotales = totalHidratos,
-            raciones = raciones,
-            unidadesInsulina = insulinaRedondeada
+        _calculo.value = buildCalculo(
+            profile = profile,
+            totalHidratos = totalHidratos,
+            glucosaMgdl = _glucosaActualMgdl.value
         )
     }
     
@@ -279,7 +280,6 @@ class NuevaComidaViewModel(
     
     fun saveRegistro() {
         val profile = cachedProfile ?: return
-        val calc = _calculo.value
         val validItems = _items.value.filter { it.alimento != null && (parseDecimal(it.gramosStr) ?: 0f) > 0f }
 
         viewModelScope.launch {
@@ -293,6 +293,27 @@ class NuevaComidaViewModel(
                     _uiEvents.tryEmit("Añade al menos un alimento válido")
                     return@launch
                 }
+
+                val nightscoutUrl = profile.nightscoutUrl
+                val nightscoutEnabled = !nightscoutUrl.isNullOrBlank()
+                var glucosaAntes: Int? = null
+                var pendingAntes = false
+                if (nightscoutEnabled) {
+                    val fetched = nightscoutRepository
+                        .getLatestGlucose(nightscoutUrl!!, profile.nightscoutToken)
+                        ?.sgv
+                    glucosaAntes = fetched ?: _glucosaActualMgdl.value
+                    if (glucosaAntes == null) {
+                        pendingAntes = true
+                    }
+                }
+
+                val totalHidratos = _items.value.sumOf { it.hidratos.toDouble() }.toFloat()
+                val calc = buildCalculo(
+                    profile = profile,
+                    totalHidratos = totalHidratos,
+                    glucosaMgdl = glucosaAntes ?: _glucosaActualMgdl.value
+                )
                 if (calc.hidratosTotales.isNaN() || calc.hidratosTotales.isInfinite() ||
                     calc.raciones.isNaN() || calc.raciones.isInfinite() ||
                     calc.unidadesInsulina.isNaN() || calc.unidadesInsulina.isInfinite()
@@ -300,19 +321,7 @@ class NuevaComidaViewModel(
                     _uiEvents.tryEmit("Cálculo inválido. Revisa los datos introducidos")
                     return@launch
                 }
-
-                val nightscoutUrl = profile.nightscoutUrl
-                val nightscoutEnabled = !nightscoutUrl.isNullOrBlank()
-                var glucosaAntes: Int? = null
-                var pendingAntes = false
-                if (nightscoutEnabled) {
-                    glucosaAntes = nightscoutRepository
-                        .getLatestGlucose(nightscoutUrl!!, profile.nightscoutToken)
-                        ?.sgv
-                    if (glucosaAntes == null) {
-                        pendingAntes = true
-                    }
-                }
+                _calculo.value = calc
 
                 val ratioInsulinaHc = if (profile.gramosPorRacion > 0f) {
                     profile.ratioInsulina / profile.gramosPorRacion
@@ -369,6 +378,43 @@ class NuevaComidaViewModel(
                 _isSaving.value = false
             }
         }
+    }
+
+    private fun buildCalculo(
+        profile: UsuarioProfile,
+        totalHidratos: Float,
+        glucosaMgdl: Int?
+    ): CalculoActual {
+        val raciones = if (profile.gramosPorRacion > 0f) {
+            totalHidratos / profile.gramosPorRacion
+        } else {
+            0f
+        }
+        val unidadesComida = if (profile.ratioInsulina > 0f) {
+            raciones * profile.ratioInsulina
+        } else {
+            0f
+        }
+        val unidadesCorreccion = calculateCorrectionUnits(profile, glucosaMgdl)
+        val totalSinRedondear = (unidadesComida + unidadesCorreccion).coerceAtLeast(0f)
+        val unidadesInsulina = Math.round(totalSinRedondear * 2f) / 2f
+
+        return CalculoActual(
+            hidratosTotales = totalHidratos,
+            raciones = raciones,
+            unidadesComida = unidadesComida,
+            unidadesCorreccion = unidadesCorreccion,
+            unidadesInsulina = unidadesInsulina,
+            glucosaUsadaMgdl = glucosaMgdl
+        )
+    }
+
+    private fun calculateCorrectionUnits(profile: UsuarioProfile, glucosaMgdl: Int?): Float {
+        if (glucosaMgdl == null) return 0f
+        val objetivo = profile.glucosaObjetivoMgdl ?: return 0f
+        val factor = profile.factorCorreccionMgdlPorU ?: return 0f
+        if (objetivo <= 0 || factor <= 0f) return 0f
+        return (glucosaMgdl - objetivo) / factor
     }
     
     private fun resetForm() {

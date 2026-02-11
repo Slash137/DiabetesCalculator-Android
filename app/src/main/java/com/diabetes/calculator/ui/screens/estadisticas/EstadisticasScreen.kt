@@ -321,6 +321,25 @@ private fun StatsContent(resumen: EstadisticasResumen) {
         StatRow("Registros con glucosa", resumen.registrosConGlucosa.toString())
     }
 
+    SectionCard(title = "Corrección en dosis aplicada") {
+        StatRow("Dosis aplicadas", resumen.dosisAplicadas.toString())
+        StatRow("Con corrección", resumen.dosisConCorreccion.toString())
+        StatRow("Sin corrección", resumen.dosisSinCorreccion.toString())
+        StatRow("Sin marcar", resumen.dosisSinMarcarCorreccion.toString())
+        StatRow(
+            "% aplicadas con corrección",
+            resumen.porcentajeConCorreccion?.let { "${format1(it)}%" } ?: "N/D"
+        )
+        StatRow(
+            "Insulina media (con corrección)",
+            resumen.insulinaMediaConCorreccion?.let { "${format1(it)} U" } ?: "N/D"
+        )
+        StatRow(
+            "Insulina media (sin corrección)",
+            resumen.insulinaMediaSinCorreccion?.let { "${format1(it)} U" } ?: "N/D"
+        )
+    }
+
     SectionCard(title = "Nightscout avanzado") {
         when {
             !resumen.nightscoutConfigured -> {

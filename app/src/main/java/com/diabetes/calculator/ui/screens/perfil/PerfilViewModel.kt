@@ -60,6 +60,12 @@ class PerfilViewModel(
     private val _objetivoInsulinaDia = MutableStateFlow("")
     val objetivoInsulinaDia: StateFlow<String> = _objetivoInsulinaDia.asStateFlow()
 
+    private val _glucosaObjetivoMgdl = MutableStateFlow("")
+    val glucosaObjetivoMgdl: StateFlow<String> = _glucosaObjetivoMgdl.asStateFlow()
+
+    private val _factorCorreccionMgdlPorU = MutableStateFlow("")
+    val factorCorreccionMgdlPorU: StateFlow<String> = _factorCorreccionMgdlPorU.asStateFlow()
+
     private val _recordatorio2hActivo = MutableStateFlow(false)
     val recordatorio2hActivo: StateFlow<Boolean> = _recordatorio2hActivo.asStateFlow()
     
@@ -103,6 +109,8 @@ class PerfilViewModel(
                     _objetivoHidratosDia.value = profile.objetivoHidratosDia?.toString().orEmpty()
                     _objetivoRacionesDia.value = profile.objetivoRacionesDia?.toString().orEmpty()
                     _objetivoInsulinaDia.value = profile.objetivoInsulinaDia?.toString().orEmpty()
+                    _glucosaObjetivoMgdl.value = profile.glucosaObjetivoMgdl?.toString().orEmpty()
+                    _factorCorreccionMgdlPorU.value = profile.factorCorreccionMgdlPorU?.toString().orEmpty()
                     _recordatorio2hActivo.value = profile.recordatorio2hActivo
                     _nightscoutUrl.value = profile.nightscoutUrl ?: ""
                     _nightscoutToken.value = profile.nightscoutToken ?: ""
@@ -114,6 +122,8 @@ class PerfilViewModel(
                     _objetivoHidratosDia.value = ""
                     _objetivoRacionesDia.value = ""
                     _objetivoInsulinaDia.value = ""
+                    _glucosaObjetivoMgdl.value = ""
+                    _factorCorreccionMgdlPorU.value = ""
                     _recordatorio2hActivo.value = false
                     _uiState.value = PerfilUiState.Empty
                 }
@@ -154,6 +164,18 @@ class PerfilViewModel(
     fun updateObjetivoInsulinaDia(value: String) {
         if (value.isEmpty() || value.matches(Regex("^\\d*([\\.,]\\d*)?$"))) {
             _objetivoInsulinaDia.value = value
+        }
+    }
+
+    fun updateGlucosaObjetivoMgdl(value: String) {
+        if (value.isEmpty() || value.matches(Regex("^\\d*$"))) {
+            _glucosaObjetivoMgdl.value = value
+        }
+    }
+
+    fun updateFactorCorreccionMgdlPorU(value: String) {
+        if (value.isEmpty() || value.matches(Regex("^\\d*([\\.,]\\d*)?$"))) {
+            _factorCorreccionMgdlPorU.value = value
         }
     }
 
@@ -200,6 +222,8 @@ class PerfilViewModel(
                 val objetivoHidratos = parseDecimal(_objetivoHidratosDia.value)
                 val objetivoRaciones = parseDecimal(_objetivoRacionesDia.value)
                 val objetivoInsulina = parseDecimal(_objetivoInsulinaDia.value)
+                val glucosaObjetivo = _glucosaObjetivoMgdl.value.trim().toIntOrNull()
+                val factorCorreccion = parseDecimal(_factorCorreccionMgdlPorU.value)
                 if (gramos == null || ratio == null) {
                     _uiState.value = PerfilUiState.Error("Formato numérico no válido")
                     return@launch
@@ -211,6 +235,24 @@ class PerfilViewModel(
                     _uiState.value = PerfilUiState.Error("Los objetivos no pueden ser negativos")
                     return@launch
                 }
+                val objetivoText = _glucosaObjetivoMgdl.value.trim()
+                val factorText = _factorCorreccionMgdlPorU.value.trim()
+                val hasObjetivo = objetivoText.isNotEmpty()
+                val hasFactor = factorText.isNotEmpty()
+                if (hasObjetivo.xor(hasFactor)) {
+                    _uiState.value = PerfilUiState.Error(
+                        "Para usar corrección por glucosa, completa objetivo y factor"
+                    )
+                    return@launch
+                }
+                if ((hasObjetivo && (glucosaObjetivo == null || glucosaObjetivo <= 0)) ||
+                    (hasFactor && (factorCorreccion == null || factorCorreccion <= 0f))
+                ) {
+                    _uiState.value = PerfilUiState.Error(
+                        "Valores de corrección por glucosa no válidos"
+                    )
+                    return@launch
+                }
                 val profile = UsuarioProfile(
                     id = currentProfile?.id ?: 1, // Mantener ID existente o usar 1
                     nombre = _nombre.value.trim(),
@@ -219,6 +261,8 @@ class PerfilViewModel(
                     objetivoHidratosDia = objetivoHidratos,
                     objetivoRacionesDia = objetivoRaciones,
                     objetivoInsulinaDia = objetivoInsulina,
+                    glucosaObjetivoMgdl = glucosaObjetivo,
+                    factorCorreccionMgdlPorU = factorCorreccion,
                     recordatorio2hActivo = _recordatorio2hActivo.value,
                     nightscoutUrl = _nightscoutUrl.value.trim().ifEmpty { null },
                     nightscoutToken = _nightscoutToken.value.trim().ifEmpty { null }

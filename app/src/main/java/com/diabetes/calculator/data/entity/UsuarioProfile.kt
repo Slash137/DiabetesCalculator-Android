@@ -15,6 +15,8 @@ import kotlinx.serialization.Serializable
  * @property objetivoHidratosDia Objetivo diario de hidratos (g)
  * @property objetivoRacionesDia Objetivo diario de raciones
  * @property objetivoInsulinaDia Objetivo diario de insulina (U)
+ * @property glucosaObjetivoMgdl Glucosa objetivo para corrección de dosis (mg/dL)
+ * @property factorCorreccionMgdlPorU Cuántos mg/dL corrige 1U de insulina rápida
  * @property recordatorio2hActivo Activar recordatorio manual a las 2 h
  * @property fechaCreacion Timestamp de creación del perfil
  */
@@ -29,6 +31,8 @@ data class UsuarioProfile(
     val objetivoHidratosDia: Float? = null,
     val objetivoRacionesDia: Float? = null,
     val objetivoInsulinaDia: Float? = null,
+    val glucosaObjetivoMgdl: Int? = null,
+    val factorCorreccionMgdlPorU: Float? = null,
     val recordatorio2hActivo: Boolean = false,
     val nightscoutUrl: String? = null,
     val nightscoutToken: String? = null,

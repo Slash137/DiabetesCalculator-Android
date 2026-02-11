@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.diabetes.calculator.data.dao.RegistroComidaConItems
+import com.diabetes.calculator.data.entity.EstadoDosis
 import com.diabetes.calculator.data.repository.NightscoutRepository
 import com.diabetes.calculator.data.repository.RegistroComidaRepository
 import com.diabetes.calculator.data.repository.UsuarioProfileRepository
@@ -59,6 +60,13 @@ data class EstadisticasResumen(
     val porcentaje2hEnRango: Float?,
     val registrosConGlucosa: Int,
     val registrosConNotas: Int,
+    val dosisAplicadas: Int,
+    val dosisConCorreccion: Int,
+    val dosisSinCorreccion: Int,
+    val dosisSinMarcarCorreccion: Int,
+    val porcentajeConCorreccion: Float?,
+    val insulinaMediaConCorreccion: Float?,
+    val insulinaMediaSinCorreccion: Float?,
     val diasSinRegistros: Int,
     val franjaDistribution: List<FranjaStat>,
     val weekdayStats: List<WeekdayStat>,
@@ -280,6 +288,28 @@ class EstadisticasViewModel(
             it.registro.glucosaAntesMgdl != null || it.registro.glucosaDespues2hMgdl != null
         }
         val registrosConNotas = registros.count { !it.registro.notas.isNullOrBlank() }
+        val dosisAplicadasRegs = registros.filter {
+            EstadoDosis.fromValue(it.registro.dosisEstado) == EstadoDosis.APLICADA
+        }
+        val dosisAplicadas = dosisAplicadasRegs.size
+        val dosisConCorreccion = dosisAplicadasRegs.count { it.registro.dosisConCorreccion == true }
+        val dosisSinCorreccion = dosisAplicadasRegs.count { it.registro.dosisConCorreccion == false }
+        val dosisSinMarcarCorreccion = dosisAplicadasRegs.count { it.registro.dosisConCorreccion == null }
+        val porcentajeConCorreccion = if (dosisAplicadas > 0) {
+            (dosisConCorreccion.toFloat() / dosisAplicadas.toFloat()) * 100f
+        } else {
+            null
+        }
+        val insulinaMediaConCorreccion = average(
+            dosisAplicadasRegs
+                .filter { it.registro.dosisConCorreccion == true }
+                .map { it.registro.unidadesInsulina }
+        )
+        val insulinaMediaSinCorreccion = average(
+            dosisAplicadasRegs
+                .filter { it.registro.dosisConCorreccion == false }
+                .map { it.registro.unidadesInsulina }
+        )
 
         val franjaDistribution = buildFranjaDistribution(registros)
         val weekdayStats = buildWeekdayStats(registros)
@@ -311,6 +341,13 @@ class EstadisticasViewModel(
             porcentaje2hEnRango = porcentaje2hEnRango,
             registrosConGlucosa = registrosConGlucosa,
             registrosConNotas = registrosConNotas,
+            dosisAplicadas = dosisAplicadas,
+            dosisConCorreccion = dosisConCorreccion,
+            dosisSinCorreccion = dosisSinCorreccion,
+            dosisSinMarcarCorreccion = dosisSinMarcarCorreccion,
+            porcentajeConCorreccion = porcentajeConCorreccion,
+            insulinaMediaConCorreccion = insulinaMediaConCorreccion,
+            insulinaMediaSinCorreccion = insulinaMediaSinCorreccion,
             diasSinRegistros = diasSinRegistros,
             franjaDistribution = franjaDistribution,
             weekdayStats = weekdayStats,

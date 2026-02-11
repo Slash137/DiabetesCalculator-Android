@@ -71,10 +71,27 @@ fun HistorialScreen(
                 detailRegistro = previousDetail.copy(
                     registro = previousDetail.registro.copy(
                         dosisEstado = nuevoEstado.value,
+                        dosisConCorreccion = if (nuevoEstado == EstadoDosis.APLICADA) {
+                            previousDetail.registro.dosisConCorreccion
+                        } else {
+                            null
+                        },
                         dosisConfirmadaAt = confirmedAt
                     )
                 )
             }
+        }
+    }
+
+    val onUpdateDoseCorrection: (RegistroComidaConItems, Boolean?) -> Unit = { registro, conCorreccion ->
+        viewModel.updateDoseCorrection(registro.registro.id, conCorreccion)
+        val previousDetail = detailRegistro
+        if (previousDetail?.registro?.id == registro.registro.id &&
+            EstadoDosis.fromValue(previousDetail.registro.dosisEstado) == EstadoDosis.APLICADA
+        ) {
+            detailRegistro = previousDetail.copy(
+                registro = previousDetail.registro.copy(dosisConCorreccion = conCorreccion)
+            )
         }
     }
 
@@ -275,6 +292,10 @@ fun HistorialScreen(
             onUpdateDoseStatus = { nuevoEstado ->
                 val current = detailRegistro ?: return@RegistroDetalleBottomSheet
                 onUpdateDoseStatus(current, nuevoEstado)
+            },
+            onUpdateDoseCorrection = { conCorreccion ->
+                val current = detailRegistro ?: return@RegistroDetalleBottomSheet
+                onUpdateDoseCorrection(current, conCorreccion)
             }
         )
     }
@@ -594,7 +615,8 @@ private fun RegistroDetalleBottomSheet(
     onDismiss: () -> Unit,
     onRequestDelete: () -> Unit,
     onRequestCreateTemplate: () -> Unit,
-    onUpdateDoseStatus: (EstadoDosis) -> Unit
+    onUpdateDoseStatus: (EstadoDosis) -> Unit,
+    onUpdateDoseCorrection: (Boolean?) -> Unit
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -678,6 +700,24 @@ private fun RegistroDetalleBottomSheet(
                 )
             }
 
+            if (estadoDosis == EstadoDosis.APLICADA) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Corrección en tiempo real",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    DoseCorrectionSelector(
+                        conCorreccion = registro.registro.dosisConCorreccion,
+                        onSelection = onUpdateDoseCorrection
+                    )
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -702,6 +742,27 @@ private fun RegistroDetalleBottomSheet(
                     value = "${String.format("%.1f", registro.registro.unidadesInsulina)} U",
                     color = InsulinaColor,
                     isMain = true
+                )
+            }
+
+            val insulinBreakdown = calculateInsulinBreakdown(registro)
+            Text(
+                text = "Desglose de insulina",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            StatDetailRow(
+                label = "Por comida",
+                value = formatUnits(insulinBreakdown.comida)
+            )
+            StatDetailRow(
+                label = "Por corrección",
+                value = formatSignedUnits(insulinBreakdown.correccion)
+            )
+            if (estadoDosis == EstadoDosis.APLICADA) {
+                StatDetailRow(
+                    label = "Marcado por ti",
+                    value = correctionLabel(registro.registro.dosisConCorreccion)
                 )
             }
 
@@ -913,10 +974,90 @@ private fun DoseStatusSelector(
     }
 }
 
+private enum class DoseCorrectionOption(
+    val label: String,
+    val value: Boolean?
+) {
+    WITH_CORRECTION("Con corrección", true),
+    WITHOUT_CORRECTION("Sin corrección", false),
+    UNSPECIFIED("Sin marcar", null)
+}
+
+@Composable
+private fun DoseCorrectionSelector(
+    conCorreccion: Boolean?,
+    onSelection: (Boolean?) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selected = DoseCorrectionOption.values().firstOrNull { it.value == conCorreccion }
+        ?: DoseCorrectionOption.UNSPECIFIED
+    val color = when (conCorreccion) {
+        true -> MaterialTheme.colorScheme.primary
+        false -> MaterialTheme.colorScheme.tertiary
+        null -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Box {
+        AssistChip(
+            onClick = { expanded = true },
+            label = { Text(selected.label) },
+            leadingIcon = {
+                Icon(
+                    imageVector = doseCorrectionIcon(conCorreccion),
+                    contentDescription = null
+                )
+            },
+            trailingIcon = {
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = null
+                )
+            },
+            colors = AssistChipDefaults.assistChipColors(
+                containerColor = color.copy(alpha = 0.14f),
+                labelColor = color,
+                leadingIconContentColor = color,
+                trailingIconContentColor = color
+            )
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            DoseCorrectionOption.values().forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label) },
+                    onClick = {
+                        onSelection(option.value)
+                        expanded = false
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = doseCorrectionIcon(option.value),
+                            contentDescription = null
+                        )
+                    },
+                    trailingIcon = {
+                        if (option == selected) {
+                            Icon(imageVector = Icons.Default.Check, contentDescription = null)
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
 private fun doseStatusIcon(estado: EstadoDosis) = when (estado) {
     EstadoDosis.PENDIENTE -> Icons.Default.Schedule
     EstadoDosis.APLICADA -> Icons.Default.CheckCircle
     EstadoDosis.OMITIDA -> Icons.Default.Cancel
+}
+
+private fun doseCorrectionIcon(conCorreccion: Boolean?) = when (conCorreccion) {
+    true -> Icons.Default.Add
+    false -> Icons.Default.Remove
+    null -> Icons.Default.HelpOutline
 }
 
 @Composable
@@ -988,6 +1129,47 @@ private data class ItemMetrics(
     val raciones: Float?,
     val insulina: Float?
 )
+
+private data class InsulinBreakdown(
+    val comida: Float,
+    val correccion: Float,
+    val total: Float
+)
+
+private fun calculateInsulinBreakdown(
+    registro: RegistroComidaConItems
+): InsulinBreakdown {
+    val total = registro.registro.unidadesInsulina
+    val hidratos = registro.registro.hidratosTotales
+    val ratioHc = registro.registro.ratioInsulinaHc
+
+    val comida = if (ratioHc != null && ratioHc > 0f && !ratioHc.isNaN() && hidratos > 0f) {
+        hidratos * ratioHc
+    } else {
+        total
+    }
+
+    val correccionRaw = total - comida
+    val correccion = if (kotlin.math.abs(correccionRaw) < 0.05f) 0f else correccionRaw
+    return InsulinBreakdown(
+        comida = comida,
+        correccion = correccion,
+        total = total
+    )
+}
+
+private fun formatUnits(value: Float): String = "${String.format("%.1f", value)} U"
+
+private fun formatSignedUnits(value: Float): String {
+    val magnitude = String.format("%.1f", kotlin.math.abs(value))
+    return if (value >= 0f) "+$magnitude U" else "-$magnitude U"
+}
+
+private fun correctionLabel(conCorreccion: Boolean?): String = when (conCorreccion) {
+    true -> "Con corrección"
+    false -> "Sin corrección"
+    null -> "Sin marcar"
+}
 
 private fun calculateItemMetrics(
     registro: RegistroComidaConItems,
