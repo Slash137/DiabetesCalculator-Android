@@ -6,9 +6,12 @@ import androidx.lifecycle.viewModelScope
 import com.diabetes.calculator.data.entity.Alimento
 import com.diabetes.calculator.data.repository.AlimentoRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
 
@@ -54,6 +57,9 @@ class AlimentosViewModel(
     // Estado de búsqueda
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+    private val _uiEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val uiEvents: SharedFlow<String> = _uiEvents.asSharedFlow()
     
     init {
         observeAlimentos()
@@ -144,6 +150,7 @@ class AlimentosViewModel(
         val nota = _dialogNota.value.trim().ifEmpty { null }
         
         if (nombre.isEmpty() || hidratos == null || hidratos < 0) {
+            _uiEvents.tryEmit("Completa los campos del alimento correctamente")
             return
         }
         
@@ -179,7 +186,17 @@ class AlimentosViewModel(
      */
     fun deleteAlimento(alimento: Alimento) {
         viewModelScope.launch {
-            repository.delete(alimento)
+            try {
+                repository.delete(alimento)
+            } catch (e: Exception) {
+                val isForeignKeyError = e.message?.contains("FOREIGN KEY", ignoreCase = true) == true
+                val message = if (isForeignKeyError) {
+                    "No se puede eliminar: el alimento está en registros guardados"
+                } else {
+                    "No se pudo eliminar el alimento"
+                }
+                _uiEvents.tryEmit(message)
+            }
         }
     }
     

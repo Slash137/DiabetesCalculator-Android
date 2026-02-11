@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Base de datos Room principal de la aplicacion.
- * Version 8 con fallback destructivo solo en debug.
+ * Version 9 con fallback destructivo solo en debug.
  */
 @Database(
     entities = [
@@ -37,7 +37,7 @@ import kotlinx.coroutines.launch
         PlantillaItem::class,
         PendingGlucose::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -63,7 +63,13 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "diabetes_calculator_db"
                 )
-                builder.addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                builder.addMigrations(
+                    MIGRATION_4_5,
+                    MIGRATION_5_6,
+                    MIGRATION_6_7,
+                    MIGRATION_7_8,
+                    MIGRATION_8_9
+                )
                 if (BuildConfig.DEBUG) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
                 }
@@ -147,6 +153,39 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                 database.execSQL(
                     "ALTER TABLE registro_comida ADD COLUMN dosisConfirmadaAt INTEGER"
+                )
+            }
+        }
+
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS alimento_en_registro_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        registroId INTEGER NOT NULL,
+                        alimentoId INTEGER NOT NULL,
+                        gramosConsumidos REAL NOT NULL,
+                        hidratosCalculados REAL NOT NULL,
+                        FOREIGN KEY(registroId) REFERENCES registro_comida(id) ON DELETE CASCADE,
+                        FOREIGN KEY(alimentoId) REFERENCES alimentos(id) ON DELETE NO ACTION
+                    )
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    INSERT INTO alimento_en_registro_new (id, registroId, alimentoId, gramosConsumidos, hidratosCalculados)
+                    SELECT id, registroId, alimentoId, gramosConsumidos, hidratosCalculados
+                    FROM alimento_en_registro
+                    """.trimIndent()
+                )
+                database.execSQL("DROP TABLE alimento_en_registro")
+                database.execSQL("ALTER TABLE alimento_en_registro_new RENAME TO alimento_en_registro")
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_alimento_en_registro_registroId ON alimento_en_registro(registroId)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_alimento_en_registro_alimentoId ON alimento_en_registro(alimentoId)"
                 )
             }
         }

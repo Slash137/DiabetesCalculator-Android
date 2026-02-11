@@ -31,9 +31,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -60,6 +63,13 @@ fun AlimentosScreen(
     val showDialog by viewModel.showDialog.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     var pendingDelete by remember { mutableStateOf<Alimento?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(Unit) {
+        viewModel.uiEvents.collect { message ->
+            snackbarHostState.showSnackbar(message)
+        }
+    }
     
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
@@ -136,6 +146,13 @@ fun AlimentosScreen(
         if (showDialog) {
             AlimentoDialog(viewModel = viewModel)
         }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 8.dp)
+        )
     }
 
     if (pendingDelete != null) {
@@ -306,6 +323,8 @@ private fun AlimentoDialog(viewModel: AlimentosViewModel) {
     val nota by viewModel.dialogNota.collectAsState()
     
     val isEditing = editingAlimento != null
+    val canSave = nombre.isNotBlank() &&
+        ((hidratos.trim().replace(',', '.').toFloatOrNull() ?: -1f) >= 0f)
     
     AlertDialog(
         onDismissRequest = viewModel::closeDialog,
@@ -357,7 +376,7 @@ private fun AlimentoDialog(viewModel: AlimentosViewModel) {
         confirmButton = {
             TextButton(
                 onClick = viewModel::saveAlimento,
-                enabled = nombre.isNotBlank() && hidratos.toFloatOrNull() != null
+                enabled = canSave
             ) {
                 Text("Guardar")
             }

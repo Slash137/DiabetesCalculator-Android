@@ -248,9 +248,17 @@ class NuevaComidaViewModel(
     private fun recalculate() {
         val profile = cachedProfile ?: return
         val totalHidratos = _items.value.sumOf { it.hidratos.toDouble() }.toFloat()
-        
-        val raciones = totalHidratos / profile.gramosPorRacion
-        val insulina = raciones * profile.ratioInsulina
+
+        val raciones = if (profile.gramosPorRacion > 0f) {
+            totalHidratos / profile.gramosPorRacion
+        } else {
+            0f
+        }
+        val insulina = if (profile.ratioInsulina > 0f) {
+            raciones * profile.ratioInsulina
+        } else {
+            0f
+        }
         // Redondear insulina al 0,5 más cercano
         val insulinaRedondeada = Math.round(insulina * 2) / 2f
         
@@ -262,8 +270,11 @@ class NuevaComidaViewModel(
     }
     
     fun canSave(): Boolean {
-        return _items.value.any { it.alimento != null && (parseDecimal(it.gramosStr) ?: 0f) > 0f } &&
-               cachedProfile != null
+        val profile = cachedProfile ?: return false
+        if (profile.gramosPorRacion <= 0f || profile.ratioInsulina <= 0f) {
+            return false
+        }
+        return _items.value.any { it.alimento != null && (parseDecimal(it.gramosStr) ?: 0f) > 0f }
     }
     
     fun saveRegistro() {
@@ -274,15 +285,19 @@ class NuevaComidaViewModel(
         viewModelScope.launch {
             _isSaving.value = true
             try {
+                if (profile.gramosPorRacion <= 0f || profile.ratioInsulina <= 0f) {
+                    _uiEvents.tryEmit("Configura un perfil válido antes de guardar")
+                    return@launch
+                }
                 if (validItems.isEmpty()) {
-                    _uiState.value = NuevaComidaUiState.Error("Añade al menos un alimento válido")
+                    _uiEvents.tryEmit("Añade al menos un alimento válido")
                     return@launch
                 }
                 if (calc.hidratosTotales.isNaN() || calc.hidratosTotales.isInfinite() ||
                     calc.raciones.isNaN() || calc.raciones.isInfinite() ||
                     calc.unidadesInsulina.isNaN() || calc.unidadesInsulina.isInfinite()
                 ) {
-                    _uiState.value = NuevaComidaUiState.Error("Cálculo inválido. Revisa los datos introducidos")
+                    _uiEvents.tryEmit("Cálculo inválido. Revisa los datos introducidos")
                     return@launch
                 }
 
@@ -342,14 +357,14 @@ class NuevaComidaViewModel(
                     scheduleNightscoutRetry()
                 }
 
-                val alertMsg = buildObjetivoAlert(calc)
+                val alertMsg = buildObjetivoAlert()
                 if (alertMsg != null) {
                     _uiEvents.tryEmit(alertMsg)
                 }
                 _saveSuccess.value = true
                 resetForm()
             } catch (e: Exception) {
-                _uiState.value = NuevaComidaUiState.Error("Error al guardar: ${e.message}")
+                _uiEvents.tryEmit("Error al guardar: ${e.message ?: "desconocido"}")
             } finally {
                 _isSaving.value = false
             }
@@ -379,14 +394,14 @@ class NuevaComidaViewModel(
         }
     }
 
-    private suspend fun buildObjetivoAlert(calc: CalculoActual): String? {
+    private suspend fun buildObjetivoAlert(): String? {
         val profile = cachedProfile ?: return null
         val start = DateUtils.getStartOfToday()
         val end = DateUtils.getEndOfToday()
 
-        val hidratosTotales = registroRepository.sumHidratosInRange(start, end) + calc.hidratosTotales
-        val racionesTotales = registroRepository.sumRacionesInRange(start, end) + calc.raciones
-        val insulinaTotal = registroRepository.sumInsulinaInRange(start, end) + calc.unidadesInsulina
+        val hidratosTotales = registroRepository.sumHidratosInRange(start, end)
+        val racionesTotales = registroRepository.sumRacionesInRange(start, end)
+        val insulinaTotal = registroRepository.sumInsulinaInRange(start, end)
 
         val mensajes = mutableListOf<String>()
         profile.objetivoHidratosDia?.takeIf { it > 0f }?.let { objetivo ->

@@ -29,7 +29,7 @@ import kotlinx.serialization.Serializable
             entity = Alimento::class,
             parentColumns = ["id"],
             childColumns = ["alimentoId"],
-            onDelete = ForeignKey.CASCADE
+            onDelete = ForeignKey.NO_ACTION
         )
     ],
     indices = [
