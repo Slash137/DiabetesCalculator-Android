@@ -8,6 +8,7 @@ import com.diabetes.calculator.data.entity.EstadoDosis
 import com.diabetes.calculator.data.entity.PlantillaItem
 import com.diabetes.calculator.data.repository.PlantillaRepository
 import com.diabetes.calculator.data.repository.RegistroComidaRepository
+import com.diabetes.calculator.data.repository.UsuarioProfileRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -45,7 +46,8 @@ enum class DoseStatusFilter(
  */
 class HistorialViewModel(
     private val repository: RegistroComidaRepository,
-    private val plantillaRepository: PlantillaRepository
+    private val plantillaRepository: PlantillaRepository,
+    private val usuarioRepository: UsuarioProfileRepository
 ) : ViewModel() {
     
     private val _uiState = MutableStateFlow<HistorialUiState>(HistorialUiState.Loading)
@@ -59,6 +61,16 @@ class HistorialViewModel(
 
     private val _doseStatusFilter = MutableStateFlow(DoseStatusFilter.ALL)
     val doseStatusFilter: StateFlow<DoseStatusFilter> = _doseStatusFilter.asStateFlow()
+
+    val factorCorreccionFallback: StateFlow<Float?> = usuarioRepository.profile
+        .map { profile ->
+            profile?.factorCorreccionMgdlPorU?.takeIf { it > 0f && !it.isNaN() }
+        }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            null
+        )
     
     init {
         observeRegistros()
@@ -179,12 +191,17 @@ class HistorialViewModel(
     
     class Factory(
         private val repository: RegistroComidaRepository,
-        private val plantillaRepository: PlantillaRepository
+        private val plantillaRepository: PlantillaRepository,
+        private val usuarioRepository: UsuarioProfileRepository
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(HistorialViewModel::class.java)) {
-                return HistorialViewModel(repository, plantillaRepository) as T
+                return HistorialViewModel(
+                    repository,
+                    plantillaRepository,
+                    usuarioRepository
+                ) as T
             }
             throw IllegalArgumentException("Clase de ViewModel desconocida")
         }

@@ -353,7 +353,8 @@ class NuevaComidaViewModel(
                     notas = _notas.value.trim().ifEmpty { null },
                     glucosaAntesMgdl = glucosaAntes,
                     dosisConCorreccion = _dosisConCorreccion.value,
-                    unidadesCorreccionSugerida = calc.unidadesCorreccion
+                    unidadesCorreccionSugerida = calc.unidadesCorreccion,
+                    factorCorreccionMgdlPorUUsado = profile.factorCorreccionMgdlPorU
                 )
                 
                 val itemsEntities = validItems.map {

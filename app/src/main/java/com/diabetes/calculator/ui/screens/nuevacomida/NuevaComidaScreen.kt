@@ -477,6 +477,11 @@ private fun NuevaComidaContent(
                     }
 
                     if (kotlin.math.abs(calculo.unidadesCorreccion) >= 0.05f) {
+                        Text(
+                            text = "Insulina por comida: ${String.format("%.1f", calculo.unidadesInsulinaSinCorreccion)} U",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         val signo = if (calculo.unidadesCorreccion >= 0f) "+" else ""
                         Text(
                             text = "Corrección por glucosa: $signo${String.format("%.1f", calculo.unidadesCorreccion)} U",
@@ -486,7 +491,7 @@ private fun NuevaComidaContent(
                     }
 
                     Text(
-                        text = "Corrección en tiempo real aplicada",
+                        text = "Corrección por glucosa alta",
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -495,12 +500,6 @@ private fun NuevaComidaContent(
                         conCorreccion = dosisConCorreccion,
                         onChange = onDosisConCorreccionChange,
                         enabled = !isSaving
-                    )
-
-                    Text(
-                        text = "Insulina por comida (sin corrección): ${String.format("%.1f", calculo.unidadesInsulinaSinCorreccion)} U",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     Button(

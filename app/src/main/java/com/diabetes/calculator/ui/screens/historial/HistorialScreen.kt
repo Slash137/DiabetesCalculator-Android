@@ -51,6 +51,7 @@ fun HistorialScreen(
     val searchQuery by viewModel.searchQuery.collectAsState()
     val dayFilter by viewModel.dayFilter.collectAsState()
     val doseStatusFilter by viewModel.doseStatusFilter.collectAsState()
+    val factorCorreccionFallback by viewModel.factorCorreccionFallback.collectAsState()
     var showDayFilterMenu by remember { mutableStateOf(false) }
     var showDoseStatusMenu by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<RegistroComidaConItems?>(null) }
@@ -280,6 +281,7 @@ fun HistorialScreen(
     if (detailRegistro != null) {
         RegistroDetalleBottomSheet(
             registro = detailRegistro!!,
+            factorCorreccionFallbackMgdlPorU = factorCorreccionFallback,
             onDismiss = { detailRegistro = null },
             onRequestDelete = {
                 pendingDelete = detailRegistro
@@ -613,6 +615,7 @@ private fun RegistroCard(
 @OptIn(ExperimentalMaterial3Api::class)
 private fun RegistroDetalleBottomSheet(
     registro: RegistroComidaConItems,
+    factorCorreccionFallbackMgdlPorU: Float?,
     onDismiss: () -> Unit,
     onRequestDelete: () -> Unit,
     onRequestCreateTemplate: () -> Unit,
@@ -674,7 +677,10 @@ private fun RegistroDetalleBottomSheet(
                 }
             }
 
-            val ratioText = buildRatioText(registro)
+            val ratioText = buildRatioText(
+                registro = registro,
+                fallbackFactorCorreccionMgdlPorU = factorCorreccionFallbackMgdlPorU
+            )
             if (!ratioText.isNullOrBlank()) {
                 Text(
                     text = ratioText,
@@ -1092,7 +1098,10 @@ private fun DataChip(
     }
 }
 
-private fun buildRatioText(registro: RegistroComidaConItems): String? {
+private fun buildRatioText(
+    registro: RegistroComidaConItems,
+    fallbackFactorCorreccionMgdlPorU: Float? = null
+): String? {
     val raciones = registro.registro.racionesCalculadas
     val hidratos = registro.registro.hidratosTotales
     val ratioHc = registro.registro.ratioInsulinaHc
@@ -1101,22 +1110,43 @@ private fun buildRatioText(registro: RegistroComidaConItems): String? {
         } else {
             null
         }
+    val parts = mutableListOf<String>()
 
-    if (ratioHc == null || ratioHc <= 0f || ratioHc.isNaN()) return null
-    if (raciones <= 0f || raciones.isNaN()) return null
+    if (ratioHc != null && ratioHc > 0f && !ratioHc.isNaN() &&
+        raciones > 0f && !raciones.isNaN() &&
+        hidratos > 0f && !hidratos.isNaN()
+    ) {
+        val gramosPorRacion = hidratos / raciones
+        if (gramosPorRacion > 0f && !gramosPorRacion.isNaN()) {
+            val ratioPorRacion = ratioHc * gramosPorRacion
+            val formatU = if (ratioPorRacion >= 10f) "%.0f" else "%.1f"
+            val formatG = if ((1f / ratioHc) >= 10f) "%.0f" else "%.2f"
+            val uPorRacionText = String.format(formatU, ratioPorRacion)
+            val gramosPorUnidadText = String.format(formatG, 1f / ratioHc)
+            parts += "1 ración/$uPorRacionText U"
+            parts += "1 U/$gramosPorUnidadText g"
+        }
+    }
 
-    val gramosPorRacion = if (hidratos > 0f) hidratos / raciones else 0f
-    if (gramosPorRacion <= 0f || gramosPorRacion.isNaN()) return null
+    val factorCorreccion = registro.registro.factorCorreccionMgdlPorUUsado
+        ?: fallbackFactorCorreccionMgdlPorU
+    val factorText = if (factorCorreccion != null && factorCorreccion > 0f && !factorCorreccion.isNaN()) {
+        "FC ${formatFactorCorreccion(factorCorreccion)} mg/dL/U"
+    } else {
+        "FC N/D"
+    }
+    parts += factorText
 
-    val ratioPorRacion = ratioHc * gramosPorRacion
+    return if (parts.isEmpty()) null else parts.joinToString(" • ")
+}
 
-    val formatU = if (ratioPorRacion >= 10f) "%.0f" else "%.1f"
-    val formatG = if (1f / ratioHc >= 10f) "%.0f" else "%.2f"
-
-    val uPorRacionText = String.format(formatU, ratioPorRacion)
-    val gramosPorUnidadText = String.format(formatG, 1f / ratioHc)
-
-    return "1 ración/$uPorRacionText U • 1 U/$gramosPorUnidadText g"
+private fun formatFactorCorreccion(value: Float): String {
+    val isInteger = kotlin.math.abs(value - value.toInt().toFloat()) < 0.05f
+    return if (isInteger) {
+        String.format("%.0f", value)
+    } else {
+        String.format("%.1f", value)
+    }
 }
 
 private data class ItemMetrics(
