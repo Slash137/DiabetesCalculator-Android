@@ -28,6 +28,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -94,6 +96,7 @@ fun NuevaComidaScreen(
     val searchQuery by viewModel.searchQuery.collectAsState()
     val plantillas by viewModel.plantillas.collectAsState()
     val notas by viewModel.notas.collectAsState()
+    val dosisConCorreccion by viewModel.dosisConCorreccion.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -162,9 +165,11 @@ fun NuevaComidaScreen(
                     isSaving = isSaving,
                     searchQuery = searchQuery,
                     notas = notas,
+                    dosisConCorreccion = dosisConCorreccion,
                     plantillas = plantillas,
                     onSearchQueryChange = viewModel::updateSearchQuery,
                     onNotasChange = viewModel::updateNotas,
+                    onDosisConCorreccionChange = viewModel::updateDosisConCorreccion,
                     onAddItem = viewModel::addItem,
                     onRemoveItem = viewModel::removeItem,
                     onUpdateItemAlimento = viewModel::updateItemAlimento,
@@ -283,9 +288,11 @@ private fun NuevaComidaContent(
     isSaving: Boolean,
     searchQuery: String,
     notas: String,
+    dosisConCorreccion: Boolean,
     plantillas: List<PlantillaConItems>,
     onSearchQueryChange: (String) -> Unit,
     onNotasChange: (String) -> Unit,
+    onDosisConCorreccionChange: (Boolean) -> Unit,
     onAddItem: () -> Unit,
     onRemoveItem: (ItemComidaTemporal) -> Unit,
     onUpdateItemAlimento: (ItemComidaTemporal, Alimento) -> Unit,
@@ -430,19 +437,29 @@ private fun NuevaComidaContent(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column {
+                                val modoDosis = if (dosisConCorreccion) {
+                                    "Con corrección"
+                                } else {
+                                    "Sin corrección"
+                                }
                                 Text(
                                     text = "Insulina recomendada",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onPrimaryContainer
                                 )
                                 Text(
-                                    text = "Dosis sugerida",
+                                    text = "Dosis sugerida ($modoDosis)",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                                 )
                             }
+                            val dosisMostrada = if (dosisConCorreccion) {
+                                calculo.unidadesInsulina
+                            } else {
+                                calculo.unidadesInsulinaSinCorreccion
+                            }
                             Text(
-                                text = "${String.format("%.1f", calculo.unidadesInsulina)} U",
+                                text = "${String.format("%.1f", dosisMostrada)} U",
                                 style = MaterialTheme.typography.headlineMedium,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = MaterialTheme.colorScheme.primary
@@ -469,7 +486,19 @@ private fun NuevaComidaContent(
                     }
 
                     Text(
-                        text = "Insulina por comida (sin corrección): ${String.format("%.1f", calculo.unidadesComida)} U",
+                        text = "Corrección en tiempo real aplicada",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    CorrectionModeSelector(
+                        conCorreccion = dosisConCorreccion,
+                        onChange = onDosisConCorreccionChange,
+                        enabled = !isSaving
+                    )
+
+                    Text(
+                        text = "Insulina por comida (sin corrección): ${String.format("%.1f", calculo.unidadesInsulinaSinCorreccion)} U",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -497,6 +526,36 @@ private fun NuevaComidaContent(
             AvisoMedico()
             Spacer(modifier = Modifier.height(16.dp))
         }
+    }
+}
+
+@Composable
+private fun CorrectionModeSelector(
+    conCorreccion: Boolean,
+    onChange: (Boolean) -> Unit,
+    enabled: Boolean
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        FilterChip(
+            selected = conCorreccion,
+            onClick = { onChange(true) },
+            enabled = enabled,
+            label = { Text("Con corrección") },
+            modifier = Modifier.weight(1f),
+            colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer
+            )
+        )
+        FilterChip(
+            selected = !conCorreccion,
+            onClick = { onChange(false) },
+            enabled = enabled,
+            label = { Text("Sin corrección") },
+            modifier = Modifier.weight(1f)
+        )
     }
 }
 

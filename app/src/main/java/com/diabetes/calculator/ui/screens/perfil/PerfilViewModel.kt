@@ -66,6 +66,9 @@ class PerfilViewModel(
     private val _factorCorreccionMgdlPorU = MutableStateFlow("")
     val factorCorreccionMgdlPorU: StateFlow<String> = _factorCorreccionMgdlPorU.asStateFlow()
 
+    private val _aplicarCorreccionPorDefecto = MutableStateFlow(true)
+    val aplicarCorreccionPorDefecto: StateFlow<Boolean> = _aplicarCorreccionPorDefecto.asStateFlow()
+
     private val _recordatorio2hActivo = MutableStateFlow(false)
     val recordatorio2hActivo: StateFlow<Boolean> = _recordatorio2hActivo.asStateFlow()
     
@@ -111,6 +114,7 @@ class PerfilViewModel(
                     _objetivoInsulinaDia.value = profile.objetivoInsulinaDia?.toString().orEmpty()
                     _glucosaObjetivoMgdl.value = profile.glucosaObjetivoMgdl?.toString().orEmpty()
                     _factorCorreccionMgdlPorU.value = profile.factorCorreccionMgdlPorU?.toString().orEmpty()
+                    _aplicarCorreccionPorDefecto.value = profile.aplicarCorreccionPorDefecto
                     _recordatorio2hActivo.value = profile.recordatorio2hActivo
                     _nightscoutUrl.value = profile.nightscoutUrl ?: ""
                     _nightscoutToken.value = profile.nightscoutToken ?: ""
@@ -124,6 +128,7 @@ class PerfilViewModel(
                     _objetivoInsulinaDia.value = ""
                     _glucosaObjetivoMgdl.value = ""
                     _factorCorreccionMgdlPorU.value = ""
+                    _aplicarCorreccionPorDefecto.value = true
                     _recordatorio2hActivo.value = false
                     _uiState.value = PerfilUiState.Empty
                 }
@@ -177,6 +182,10 @@ class PerfilViewModel(
         if (value.isEmpty() || value.matches(Regex("^\\d*([\\.,]\\d*)?$"))) {
             _factorCorreccionMgdlPorU.value = value
         }
+    }
+
+    fun updateAplicarCorreccionPorDefecto(value: Boolean) {
+        _aplicarCorreccionPorDefecto.value = value
     }
 
     fun updateRecordatorio2hActivo(value: Boolean) {
@@ -263,6 +272,7 @@ class PerfilViewModel(
                     objetivoInsulinaDia = objetivoInsulina,
                     glucosaObjetivoMgdl = glucosaObjetivo,
                     factorCorreccionMgdlPorU = factorCorreccion,
+                    aplicarCorreccionPorDefecto = _aplicarCorreccionPorDefecto.value,
                     recordatorio2hActivo = _recordatorio2hActivo.value,
                     nightscoutUrl = _nightscoutUrl.value.trim().ifEmpty { null },
                     nightscoutToken = _nightscoutToken.value.trim().ifEmpty { null }

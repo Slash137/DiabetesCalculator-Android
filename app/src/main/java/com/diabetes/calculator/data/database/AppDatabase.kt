@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Base de datos Room principal de la aplicacion.
- * Version 11 con fallback destructivo solo en debug.
+ * Version 13 con fallback destructivo solo en debug.
  */
 @Database(
     entities = [
@@ -37,7 +37,7 @@ import kotlinx.coroutines.launch
         PlantillaItem::class,
         PendingGlucose::class
     ],
-    version = 11,
+    version = 13,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -70,7 +70,9 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_7_8,
                     MIGRATION_8_9,
                     MIGRATION_9_10,
-                    MIGRATION_10_11
+                    MIGRATION_10_11,
+                    MIGRATION_11_12,
+                    MIGRATION_12_13
                 )
                 if (BuildConfig.DEBUG) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -202,6 +204,20 @@ abstract class AppDatabase : RoomDatabase() {
         private val MIGRATION_10_11 = object : Migration(10, 11) {
             override fun migrate(database: SupportSQLiteDatabase) {
                 database.execSQL("ALTER TABLE registro_comida ADD COLUMN dosisConCorreccion INTEGER")
+            }
+        }
+
+        private val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE registro_comida ADD COLUMN unidadesCorreccionSugerida REAL")
+            }
+        }
+
+        private val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE usuario_profile ADD COLUMN aplicarCorreccionPorDefecto INTEGER NOT NULL DEFAULT 1"
+                )
             }
         }
     }

@@ -104,6 +104,7 @@ fun PerfilScreen(
     val objetivoInsulinaDia by viewModel.objetivoInsulinaDia.collectAsState()
     val glucosaObjetivoMgdl by viewModel.glucosaObjetivoMgdl.collectAsState()
     val factorCorreccionMgdlPorU by viewModel.factorCorreccionMgdlPorU.collectAsState()
+    val aplicarCorreccionPorDefecto by viewModel.aplicarCorreccionPorDefecto.collectAsState()
     val recordatorio2hActivo by viewModel.recordatorio2hActivo.collectAsState()
     val nightscoutUrl by viewModel.nightscoutUrl.collectAsState()
     val nightscoutToken by viewModel.nightscoutToken.collectAsState()
@@ -419,6 +420,7 @@ fun PerfilScreen(
                     objetivoInsulinaDia = objetivoInsulinaDia,
                     glucosaObjetivoMgdl = glucosaObjetivoMgdl,
                     factorCorreccionMgdlPorU = factorCorreccionMgdlPorU,
+                    aplicarCorreccionPorDefecto = aplicarCorreccionPorDefecto,
                     recordatorio2hActivo = recordatorio2hActivo,
                     isSaving = isSaving,
                     isNewProfile = uiState is PerfilUiState.Empty,
@@ -430,6 +432,7 @@ fun PerfilScreen(
                     onObjetivoInsulinaDiaChange = viewModel::updateObjetivoInsulinaDia,
                     onGlucosaObjetivoMgdlChange = viewModel::updateGlucosaObjetivoMgdl,
                     onFactorCorreccionMgdlPorUChange = viewModel::updateFactorCorreccionMgdlPorU,
+                    onAplicarCorreccionPorDefectoChange = viewModel::updateAplicarCorreccionPorDefecto,
                     onRecordatorio2hChange = onRecordatorio2hChange@{ enabled ->
                         if (enabled && android.os.Build.VERSION.SDK_INT >= 33) {
                             val granted = ContextCompat.checkSelfPermission(
@@ -507,6 +510,7 @@ private fun PerfilContent(
     objetivoInsulinaDia: String,
     glucosaObjetivoMgdl: String,
     factorCorreccionMgdlPorU: String,
+    aplicarCorreccionPorDefecto: Boolean,
     recordatorio2hActivo: Boolean,
     isSaving: Boolean,
     isNewProfile: Boolean,
@@ -518,6 +522,7 @@ private fun PerfilContent(
     onObjetivoInsulinaDiaChange: (String) -> Unit,
     onGlucosaObjetivoMgdlChange: (String) -> Unit,
     onFactorCorreccionMgdlPorUChange: (String) -> Unit,
+    onAplicarCorreccionPorDefectoChange: (Boolean) -> Unit,
     onRecordatorio2hChange: (Boolean) -> Unit,
     onSave: () -> Unit,
     canSave: Boolean,
@@ -724,6 +729,7 @@ private fun PerfilContent(
                             }
                         }
                     }
+
                 }
             }
 
@@ -795,6 +801,29 @@ private fun PerfilContent(
                                 factorField(Modifier.fillMaxWidth())
                             }
                         }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Corrección por defecto en nueva comida",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Switch(
+                            checked = aplicarCorreccionPorDefecto,
+                            onCheckedChange = onAplicarCorreccionPorDefectoChange,
+                            enabled = !isSaving,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = MaterialTheme.colorScheme.primary,
+                                checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
+                            )
+                        )
                     }
                 }
             }

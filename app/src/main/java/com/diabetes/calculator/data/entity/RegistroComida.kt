@@ -22,6 +22,7 @@ import kotlinx.serialization.Serializable
  * @property glucosaDespues2hMgdl Glucosa medida 2h después (mg/dL)
  * @property dosisEstado Estado de aplicación de la dosis recomendada
  * @property dosisConCorreccion Si la dosis aplicada se hizo con corrección por glucosa en tiempo real
+ * @property unidadesCorreccionSugerida Unidades de corrección sugeridas por glucosa al crear el registro
  * @property dosisConfirmadaAt Timestamp real de aplicación si se confirmó
  */
 @Entity(tableName = "registro_comida")
@@ -39,5 +40,6 @@ data class RegistroComida(
     val glucosaDespues2hMgdl: Int? = null,
     val dosisEstado: String = EstadoDosis.PENDIENTE.value,
     val dosisConCorreccion: Boolean? = null,
+    val unidadesCorreccionSugerida: Float? = null,
     val dosisConfirmadaAt: Long? = null
 )

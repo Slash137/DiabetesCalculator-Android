@@ -17,6 +17,7 @@ import kotlinx.serialization.Serializable
  * @property objetivoInsulinaDia Objetivo diario de insulina (U)
  * @property glucosaObjetivoMgdl Glucosa objetivo para corrección de dosis (mg/dL)
  * @property factorCorreccionMgdlPorU Cuántos mg/dL corrige 1U de insulina rápida
+ * @property aplicarCorreccionPorDefecto Si la corrección por glucosa se aplica por defecto en nueva comida
  * @property recordatorio2hActivo Activar recordatorio manual a las 2 h
  * @property fechaCreacion Timestamp de creación del perfil
  */
@@ -33,6 +34,7 @@ data class UsuarioProfile(
     val objetivoInsulinaDia: Float? = null,
     val glucosaObjetivoMgdl: Int? = null,
     val factorCorreccionMgdlPorU: Float? = null,
+    val aplicarCorreccionPorDefecto: Boolean = true,
     val recordatorio2hActivo: Boolean = false,
     val nightscoutUrl: String? = null,
     val nightscoutToken: String? = null,

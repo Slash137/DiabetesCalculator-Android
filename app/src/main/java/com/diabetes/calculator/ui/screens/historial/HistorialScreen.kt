@@ -484,6 +484,7 @@ private fun RegistroCard(
     onDelete: () -> Unit
 ) {
     val estadoDosis = EstadoDosis.fromValue(registro.registro.dosisEstado)
+    val insulinBreakdown = calculateInsulinBreakdown(registro)
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -599,7 +600,7 @@ private fun RegistroCard(
                 DataChip(
                     modifier = Modifier.weight(1.2f),
                     label = "INSULINA",
-                    value = "${String.format("%.1f", registro.registro.unidadesInsulina)} U",
+                    value = "${String.format("%.1f", insulinBreakdown.total)} U",
                     color = InsulinaColor,
                     isMain = true
                 )
@@ -700,24 +701,7 @@ private fun RegistroDetalleBottomSheet(
                 )
             }
 
-            if (estadoDosis == EstadoDosis.APLICADA) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Corrección en tiempo real",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    DoseCorrectionSelector(
-                        conCorreccion = registro.registro.dosisConCorreccion,
-                        onSelection = onUpdateDoseCorrection
-                    )
-                }
-            }
-
+            val insulinBreakdown = calculateInsulinBreakdown(registro)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -739,13 +723,12 @@ private fun RegistroDetalleBottomSheet(
                 DataChip(
                     modifier = Modifier.weight(1.2f),
                     label = "INSULINA",
-                    value = "${String.format("%.1f", registro.registro.unidadesInsulina)} U",
+                    value = "${String.format("%.1f", insulinBreakdown.total)} U",
                     color = InsulinaColor,
                     isMain = true
                 )
             }
 
-            val insulinBreakdown = calculateInsulinBreakdown(registro)
             Text(
                 text = "Desglose de insulina",
                 style = MaterialTheme.typography.titleSmall,
@@ -760,10 +743,21 @@ private fun RegistroDetalleBottomSheet(
                 value = formatSignedUnits(insulinBreakdown.correccion)
             )
             if (estadoDosis == EstadoDosis.APLICADA) {
-                StatDetailRow(
-                    label = "Marcado por ti",
-                    value = correctionLabel(registro.registro.dosisConCorreccion)
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Corrección",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    DoseCorrectionSelector(
+                        conCorreccion = registro.registro.dosisConCorreccion,
+                        onSelection = onUpdateDoseCorrection
+                    )
+                }
             }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -1139,22 +1133,29 @@ private data class InsulinBreakdown(
 private fun calculateInsulinBreakdown(
     registro: RegistroComidaConItems
 ): InsulinBreakdown {
-    val total = registro.registro.unidadesInsulina
+    val totalGuardado = registro.registro.unidadesInsulina
     val hidratos = registro.registro.hidratosTotales
     val ratioHc = registro.registro.ratioInsulinaHc
 
-    val comida = if (ratioHc != null && ratioHc > 0f && !ratioHc.isNaN() && hidratos > 0f) {
+    val comidaRaw = if (ratioHc != null && ratioHc > 0f && !ratioHc.isNaN() && hidratos > 0f) {
         hidratos * ratioHc
     } else {
-        total
+        totalGuardado
+    }
+    val comida = roundToHalf(comidaRaw.coerceAtLeast(0f))
+
+    val correccionRaw = registro.registro.unidadesCorreccionSugerida ?: (totalGuardado - comidaRaw)
+    val correccion = if (kotlin.math.abs(correccionRaw) < 0.05f) 0f else correccionRaw
+    val totalMostrado = if (registro.registro.dosisConCorreccion == false) {
+        comida
+    } else {
+        totalGuardado
     }
 
-    val correccionRaw = total - comida
-    val correccion = if (kotlin.math.abs(correccionRaw) < 0.05f) 0f else correccionRaw
     return InsulinBreakdown(
         comida = comida,
         correccion = correccion,
-        total = total
+        total = totalMostrado
     )
 }
 
@@ -1165,11 +1166,7 @@ private fun formatSignedUnits(value: Float): String {
     return if (value >= 0f) "+$magnitude U" else "-$magnitude U"
 }
 
-private fun correctionLabel(conCorreccion: Boolean?): String = when (conCorreccion) {
-    true -> "Con corrección"
-    false -> "Sin corrección"
-    null -> "Sin marcar"
-}
+private fun roundToHalf(value: Float): Float = kotlin.math.round(value * 2f) / 2f
 
 private fun calculateItemMetrics(
     registro: RegistroComidaConItems,

@@ -63,6 +63,7 @@ data class CalculoActual(
     val unidadesComida: Float = 0f,
     val unidadesCorreccion: Float = 0f,
     val unidadesInsulina: Float = 0f,
+    val unidadesInsulinaSinCorreccion: Float = 0f,
     val glucosaUsadaMgdl: Int? = null
 )
 
@@ -107,6 +108,9 @@ class NuevaComidaViewModel(
     val calculo: StateFlow<CalculoActual> = _calculo.asStateFlow()
 
     private val _glucosaActualMgdl = MutableStateFlow<Int?>(null)
+    private val _dosisConCorreccion = MutableStateFlow(false)
+    val dosisConCorreccion: StateFlow<Boolean> = _dosisConCorreccion.asStateFlow()
+    private var correctionSelectionEdited = false
     
     // Estados de UI auxiliares
     private val _isSaving = MutableStateFlow(false)
@@ -168,6 +172,11 @@ class NuevaComidaViewModel(
     
     fun updateNotas(notas: String) {
         _notas.value = notas
+    }
+
+    fun updateDosisConCorreccion(conCorreccion: Boolean) {
+        correctionSelectionEdited = true
+        _dosisConCorreccion.value = conCorreccion
     }
     
     fun addItem() {
@@ -263,11 +272,15 @@ class NuevaComidaViewModel(
     private fun recalculate() {
         val profile = cachedProfile ?: return
         val totalHidratos = _items.value.sumOf { it.hidratos.toDouble() }.toFloat()
-        _calculo.value = buildCalculo(
+        val nuevoCalculo = buildCalculo(
             profile = profile,
             totalHidratos = totalHidratos,
             glucosaMgdl = _glucosaActualMgdl.value
         )
+        _calculo.value = nuevoCalculo
+        if (!correctionSelectionEdited) {
+            _dosisConCorreccion.value = profile.aplicarCorreccionPorDefecto && hasRealtimeCorrection(nuevoCalculo)
+        }
     }
     
     fun canSave(): Boolean {
@@ -314,9 +327,12 @@ class NuevaComidaViewModel(
                     totalHidratos = totalHidratos,
                     glucosaMgdl = glucosaAntes ?: _glucosaActualMgdl.value
                 )
+                val unidadesSeleccionadas = selectedInsulinUnits(calc, _dosisConCorreccion.value)
                 if (calc.hidratosTotales.isNaN() || calc.hidratosTotales.isInfinite() ||
                     calc.raciones.isNaN() || calc.raciones.isInfinite() ||
-                    calc.unidadesInsulina.isNaN() || calc.unidadesInsulina.isInfinite()
+                    calc.unidadesInsulina.isNaN() || calc.unidadesInsulina.isInfinite() ||
+                    calc.unidadesInsulinaSinCorreccion.isNaN() || calc.unidadesInsulinaSinCorreccion.isInfinite() ||
+                    unidadesSeleccionadas.isNaN() || unidadesSeleccionadas.isInfinite()
                 ) {
                     _uiEvents.tryEmit("Cálculo inválido. Revisa los datos introducidos")
                     return@launch
@@ -332,10 +348,12 @@ class NuevaComidaViewModel(
                 val registro = RegistroComida(
                     hidratosTotales = calc.hidratosTotales,
                     racionesCalculadas = calc.raciones,
-                    unidadesInsulina = calc.unidadesInsulina,
+                    unidadesInsulina = unidadesSeleccionadas,
                     ratioInsulinaHc = ratioInsulinaHc,
                     notas = _notas.value.trim().ifEmpty { null },
-                    glucosaAntesMgdl = glucosaAntes
+                    glucosaAntesMgdl = glucosaAntes,
+                    dosisConCorreccion = _dosisConCorreccion.value,
+                    unidadesCorreccionSugerida = calc.unidadesCorreccion
                 )
                 
                 val itemsEntities = validItems.map {
@@ -396,8 +414,9 @@ class NuevaComidaViewModel(
             0f
         }
         val unidadesCorreccion = calculateCorrectionUnits(profile, glucosaMgdl)
+        val unidadesInsulinaSinCorreccion = roundToHalf(unidadesComida.coerceAtLeast(0f))
         val totalSinRedondear = (unidadesComida + unidadesCorreccion).coerceAtLeast(0f)
-        val unidadesInsulina = Math.round(totalSinRedondear * 2f) / 2f
+        val unidadesInsulina = roundToHalf(totalSinRedondear)
 
         return CalculoActual(
             hidratosTotales = totalHidratos,
@@ -405,6 +424,7 @@ class NuevaComidaViewModel(
             unidadesComida = unidadesComida,
             unidadesCorreccion = unidadesCorreccion,
             unidadesInsulina = unidadesInsulina,
+            unidadesInsulinaSinCorreccion = unidadesInsulinaSinCorreccion,
             glucosaUsadaMgdl = glucosaMgdl
         )
     }
@@ -416,11 +436,29 @@ class NuevaComidaViewModel(
         if (objetivo <= 0 || factor <= 0f) return 0f
         return (glucosaMgdl - objetivo) / factor
     }
+
+    private fun hasRealtimeCorrection(calculo: CalculoActual): Boolean {
+        return kotlin.math.abs(calculo.unidadesCorreccion) >= 0.05f
+    }
+
+    private fun selectedInsulinUnits(calculo: CalculoActual, conCorreccion: Boolean): Float {
+        return if (conCorreccion) {
+            calculo.unidadesInsulina
+        } else {
+            calculo.unidadesInsulinaSinCorreccion
+        }
+    }
+
+    private fun roundToHalf(value: Float): Float {
+        return kotlin.math.round(value * 2f) / 2f
+    }
     
     private fun resetForm() {
         _items.value = listOf(ItemComidaTemporal())
         _notas.value = ""
         _calculo.value = CalculoActual()
+        _dosisConCorreccion.value = false
+        correctionSelectionEdited = false
         _searchQuery.value = ""
     }
     
