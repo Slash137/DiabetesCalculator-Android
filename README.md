@@ -74,7 +74,8 @@ Aplicación Android para el cálculo de hidratos, raciones e insulina rápida, c
 
 ## Datos iniciales
 
-- `alimentos_librito.csv` se usa como semilla para la base de datos de alimentos.
+- `alimentos_librito.csv` se incluye como referencia/fuente del dataset.
+- La semilla Android actual se carga desde código en `populateDatabase()` para mantener inserciones idempotentes.
 - La app actualiza o inserta alimentos de forma idempotente.
 
 ## Construcción y ejecución
@@ -82,13 +83,15 @@ Aplicación Android para el cálculo de hidratos, raciones e insulina rápida, c
 Requisitos:
 
 - Android Studio (Iguana o superior recomendado).
-- JDK 17.
+- JDK 17 (recomendado para build/lint).
 - Android SDK 34.
 
 Comandos útiles:
 
 - `./gradlew assembleDebug`
 - `./gradlew :app:compileDebugKotlin`
+- `./gradlew testDebugUnitTest`
+- `./gradlew lintDebug` (ejecutar con JDK 17)
 
 ## Estructura del proyecto (resumen)
 

@@ -831,6 +831,8 @@ private fun PerfilContent(
                         label = { Text("Token de API (opcional)") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         enabled = !isSaving,
                         shape = RoundedCornerShape(12.dp)
                     )

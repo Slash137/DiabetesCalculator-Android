@@ -36,6 +36,9 @@ class NightscoutRepository {
     
     private var currentUrl: String? = null
     private var api: NightscoutApi? = null
+    @Volatile
+    var lastErrorMessage: String? = null
+        private set
     
     private fun getClient(): OkHttpClient {
         return OkHttpClient.Builder()
@@ -64,9 +67,10 @@ class NightscoutRepository {
             }
             
             val entries = api?.getRecentEntries(count = 1, token = token)
+            lastErrorMessage = null
             return entries?.firstOrNull()
         } catch (e: Exception) {
-            e.printStackTrace()
+            lastErrorMessage = formatError(e)
             return null
         }
     }
@@ -96,10 +100,11 @@ class NightscoutRepository {
             val from = targetMillis - toleranceMs
             val to = targetMillis + toleranceMs
             val entries = api?.getEntriesInRange(from = from, to = to, count = 50, token = token)
+            lastErrorMessage = null
             return entries
                 ?.minByOrNull { kotlin.math.abs(it.date - targetMillis) }
         } catch (e: Exception) {
-            e.printStackTrace()
+            lastErrorMessage = formatError(e)
             return null
         }
     }
@@ -147,10 +152,16 @@ class NightscoutRepository {
                 skip += page.size
             }
 
+            lastErrorMessage = null
             all.sortedBy { it.date }
         } catch (e: Exception) {
-            e.printStackTrace()
+            lastErrorMessage = formatError(e)
             emptyList()
         }
+    }
+
+    private fun formatError(e: Exception): String {
+        val detail = e.message?.takeIf { it.isNotBlank() } ?: "sin detalle"
+        return "${e.javaClass.simpleName}: $detail"
     }
 }

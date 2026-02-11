@@ -67,7 +67,9 @@ class NightscoutRetryWorker(
                     pendingDao.update(
                         item.copy(
                             attempts = nextAttempts,
-                            lastError = errorMessage ?: "Sin datos"
+                            lastError = errorMessage
+                                ?: nightscoutRepo.lastErrorMessage
+                                ?: "Sin datos"
                         )
                     )
                 }
