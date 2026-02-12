@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Base de datos Room principal de la aplicacion.
- * Version 14 con fallback destructivo solo en debug.
+ * Version 15 con fallback destructivo solo en debug.
  */
 @Database(
     entities = [
@@ -37,7 +37,7 @@ import kotlinx.coroutines.launch
         PlantillaItem::class,
         PendingGlucose::class
     ],
-    version = 14,
+    version = 15,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -73,7 +73,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_10_11,
                     MIGRATION_11_12,
                     MIGRATION_12_13,
-                    MIGRATION_13_14
+                    MIGRATION_13_14,
+                    MIGRATION_14_15
                 )
                 if (BuildConfig.DEBUG) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -227,6 +228,43 @@ abstract class AppDatabase : RoomDatabase() {
                 database.execSQL(
                     "ALTER TABLE registro_comida ADD COLUMN factorCorreccionMgdlPorUUsado REAL"
                 )
+            }
+        }
+
+        private val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorHoraMadrugada REAL NOT NULL DEFAULT 1.0")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorHoraManana REAL NOT NULL DEFAULT 1.0")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorHoraTarde REAL NOT NULL DEFAULT 1.0")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorHoraNoche REAL NOT NULL DEFAULT 1.0")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorEstresLeve REAL NOT NULL DEFAULT 1.10")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorEstresModerado REAL NOT NULL DEFAULT 1.20")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorEstresAlto REAL NOT NULL DEFAULT 1.30")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorEnfermedadLeve REAL NOT NULL DEFAULT 1.10")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorEnfermedadModerada REAL NOT NULL DEFAULT 1.20")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorEnfermedadAlta REAL NOT NULL DEFAULT 1.30")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN cicloHormonalActivo INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorCicloMenstruacion REAL NOT NULL DEFAULT 0.95")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorCicloFolicular REAL NOT NULL DEFAULT 1.00")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorCicloOvulacion REAL NOT NULL DEFAULT 1.05")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorCicloLutea REAL NOT NULL DEFAULT 1.15")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorEjercicioSuave REAL NOT NULL DEFAULT 0.90")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorEjercicioModerado REAL NOT NULL DEFAULT 0.80")
+                database.execSQL("ALTER TABLE usuario_profile ADD COLUMN factorEjercicioIntenso REAL NOT NULL DEFAULT 0.70")
+
+                database.execSQL("ALTER TABLE registro_comida ADD COLUMN franjaHorariaUsada TEXT")
+                database.execSQL("ALTER TABLE registro_comida ADD COLUMN nivelEstresUsado TEXT")
+                database.execSQL("ALTER TABLE registro_comida ADD COLUMN nivelEnfermedadUsado TEXT")
+                database.execSQL("ALTER TABLE registro_comida ADD COLUMN faseCicloUsada TEXT")
+                database.execSQL("ALTER TABLE registro_comida ADD COLUMN nivelEjercicioUsado TEXT")
+                database.execSQL("ALTER TABLE registro_comida ADD COLUMN factorHoraUsado REAL")
+                database.execSQL("ALTER TABLE registro_comida ADD COLUMN factorEstresUsado REAL")
+                database.execSQL("ALTER TABLE registro_comida ADD COLUMN factorEnfermedadUsado REAL")
+                database.execSQL("ALTER TABLE registro_comida ADD COLUMN factorCicloUsado REAL")
+                database.execSQL("ALTER TABLE registro_comida ADD COLUMN factorEjercicioUsado REAL")
+                database.execSQL("ALTER TABLE registro_comida ADD COLUMN factorContextoTotalRaw REAL")
+                database.execSQL("ALTER TABLE registro_comida ADD COLUMN factorContextoTotalAplicado REAL")
+                database.execSQL("ALTER TABLE registro_comida ADD COLUMN factorContextoCapado INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

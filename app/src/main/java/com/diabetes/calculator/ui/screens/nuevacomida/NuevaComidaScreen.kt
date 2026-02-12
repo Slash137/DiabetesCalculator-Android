@@ -4,6 +4,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,7 +15,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -27,6 +29,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -57,6 +60,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -68,10 +73,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.diabetes.calculator.data.entity.Alimento
 import com.diabetes.calculator.data.dao.PlantillaConItems
+import com.diabetes.calculator.domain.FactoresContextoInsulina
+import com.diabetes.calculator.domain.FaseCicloHormonal
+import com.diabetes.calculator.domain.FranjaHoraria
+import com.diabetes.calculator.domain.NivelEjercicio
+import com.diabetes.calculator.domain.NivelEnfermedad
+import com.diabetes.calculator.domain.NivelEstres
 import com.diabetes.calculator.ui.components.AvisoMedico
 import com.diabetes.calculator.ui.theme.HidratosColor
 import com.diabetes.calculator.ui.theme.InsulinaColor
 import com.diabetes.calculator.ui.theme.RacionesColor
+import com.diabetes.calculator.ui.theme.WarningColor
+import androidx.compose.foundation.rememberScrollState
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import java.util.Locale
@@ -97,6 +110,11 @@ fun NuevaComidaScreen(
     val plantillas by viewModel.plantillas.collectAsState()
     val notas by viewModel.notas.collectAsState()
     val dosisConCorreccion by viewModel.dosisConCorreccion.collectAsState()
+    val franjaHoraria by viewModel.franjaHoraria.collectAsState()
+    val nivelEstres by viewModel.nivelEstres.collectAsState()
+    val nivelEnfermedad by viewModel.nivelEnfermedad.collectAsState()
+    val faseCiclo by viewModel.faseCiclo.collectAsState()
+    val nivelEjercicio by viewModel.nivelEjercicio.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -166,10 +184,21 @@ fun NuevaComidaScreen(
                     searchQuery = searchQuery,
                     notas = notas,
                     dosisConCorreccion = dosisConCorreccion,
+                    franjaHoraria = franjaHoraria,
+                    nivelEstres = nivelEstres,
+                    nivelEnfermedad = nivelEnfermedad,
+                    faseCiclo = faseCiclo,
+                    nivelEjercicio = nivelEjercicio,
+                    cicloHormonalActivo = state.profile.cicloHormonalActivo,
                     plantillas = plantillas,
                     onSearchQueryChange = viewModel::updateSearchQuery,
                     onNotasChange = viewModel::updateNotas,
                     onDosisConCorreccionChange = viewModel::updateDosisConCorreccion,
+                    onFranjaHorariaChange = viewModel::updateFranjaHoraria,
+                    onNivelEstresChange = viewModel::updateNivelEstres,
+                    onNivelEnfermedadChange = viewModel::updateNivelEnfermedad,
+                    onFaseCicloChange = viewModel::updateFaseCiclo,
+                    onNivelEjercicioChange = viewModel::updateNivelEjercicio,
                     onAddItem = viewModel::addItem,
                     onRemoveItem = viewModel::removeItem,
                     onUpdateItemAlimento = viewModel::updateItemAlimento,
@@ -289,10 +318,21 @@ private fun NuevaComidaContent(
     searchQuery: String,
     notas: String,
     dosisConCorreccion: Boolean,
+    franjaHoraria: FranjaHoraria,
+    nivelEstres: NivelEstres,
+    nivelEnfermedad: NivelEnfermedad,
+    faseCiclo: FaseCicloHormonal,
+    nivelEjercicio: NivelEjercicio,
+    cicloHormonalActivo: Boolean,
     plantillas: List<PlantillaConItems>,
     onSearchQueryChange: (String) -> Unit,
     onNotasChange: (String) -> Unit,
     onDosisConCorreccionChange: (Boolean) -> Unit,
+    onFranjaHorariaChange: (FranjaHoraria) -> Unit,
+    onNivelEstresChange: (NivelEstres) -> Unit,
+    onNivelEnfermedadChange: (NivelEnfermedad) -> Unit,
+    onFaseCicloChange: (FaseCicloHormonal) -> Unit,
+    onNivelEjercicioChange: (NivelEjercicio) -> Unit,
     onAddItem: () -> Unit,
     onRemoveItem: (ItemComidaTemporal) -> Unit,
     onUpdateItemAlimento: (ItemComidaTemporal, Alimento) -> Unit,
@@ -302,6 +342,9 @@ private fun NuevaComidaContent(
     onOpenPlantillas: () -> Unit,
     onSavePlantilla: () -> Unit
 ) {
+    var showContextEditor by remember { mutableStateOf(false) }
+    var showFactorBreakdown by remember { mutableStateOf(false) }
+
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.TopCenter
@@ -368,6 +411,49 @@ private fun NuevaComidaContent(
                 Icon(Icons.Default.Add, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("Añadir alimento")
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer
+                ),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "Factores contextuales",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Ajustan la dosis final con límite de seguridad ±40%.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    val contextSummaryChips = buildContextSummaryChips(
+                        franjaHoraria = franjaHoraria,
+                        nivelEstres = nivelEstres,
+                        nivelEnfermedad = nivelEnfermedad,
+                        faseCiclo = faseCiclo,
+                        nivelEjercicio = nivelEjercicio,
+                        colors = MaterialTheme.colorScheme
+                    )
+                    if (contextSummaryChips.isNotEmpty()) {
+                        ContextInfoChipsRow(chips = contextSummaryChips)
+                    }
+                    OutlinedButton(
+                        onClick = { showContextEditor = true },
+                        enabled = !isSaving,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Editar factores")
+                    }
+                }
             }
 
             // Campo de Notas
@@ -467,26 +553,46 @@ private fun NuevaComidaContent(
                         }
                     }
 
-                    val glucosaActual = calculo.glucosaUsadaMgdl
-                    if (glucosaActual != null) {
-                        Text(
-                            text = "Glucosa actual usada: $glucosaActual mg/dL",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
                     if (kotlin.math.abs(calculo.unidadesCorreccion) >= 0.05f) {
                         Text(
-                            text = "Insulina por comida: ${String.format("%.1f", calculo.unidadesInsulinaSinCorreccion)} U",
+                            text = "Insulina por comida (sin corrección glucosa): ${String.format("%.1f", calculo.unidadesInsulinaSinCorreccion)} U",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+
+                        val glucosaActual = calculo.glucosaUsadaMgdl
                         val signo = if (calculo.unidadesCorreccion >= 0f) "+" else ""
+
+                        if (glucosaActual != null) {
+                            Text(
+                                text = "Corrección por glucosa ($glucosaActual mg/dL): $signo${String.format("%.1f",calculo.unidadesCorreccion)} U",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            Text(
+                                text = "Corrección por glucosa: $signo${String.format("%.1f", calculo.unidadesCorreccion)} U",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Factor contexto total: x${String.format(Locale.getDefault(), "%.2f", calculo.factorContextoTotalAplicado)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (calculo.factorContextoCapado) {
                         Text(
-                            text = "Corrección por glucosa: $signo${String.format("%.1f", calculo.unidadesCorreccion)} U",
+                            text = "Valor original: x${String.format(Locale.getDefault(), "%.2f", calculo.factorContextoTotalRaw)}",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Text(
+                            text = "Se aplicó límite de seguridad (x0.60 a x1.40).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
                         )
                     }
 
@@ -519,11 +625,177 @@ private fun NuevaComidaContent(
                             Text("Guardar Registro", style = MaterialTheme.typography.titleMedium)
                         }
                     }
+
+                    TextButton(
+                        onClick = { showFactorBreakdown = !showFactorBreakdown },
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    ) {
+                        Text(if (showFactorBreakdown) "Ocultar detalle factores" else "Ver detalle factores")
+                    }
+                    if (showFactorBreakdown) {
+                        val detailParts = buildList {
+                            add("Hora x${String.format(Locale.getDefault(), "%.2f", calculo.factorHora)}")
+                            if (calculo.nivelEstres != NivelEstres.NINGUNO) {
+                                add("Estrés x${String.format(Locale.getDefault(), "%.2f", calculo.factorEstres)}")
+                            }
+                            if (calculo.nivelEnfermedad != NivelEnfermedad.NINGUNA) {
+                                add("Enfermedad x${String.format(Locale.getDefault(), "%.2f", calculo.factorEnfermedad)}")
+                            }
+                            if (calculo.faseCiclo != FaseCicloHormonal.NO_APLICAR) {
+                                add("Ciclo x${String.format(Locale.getDefault(), "%.2f", calculo.factorCiclo)}")
+                            }
+                            if (calculo.nivelEjercicio != NivelEjercicio.NINGUNO) {
+                                add("Ejercicio x${String.format(Locale.getDefault(), "%.2f", calculo.factorEjercicio)}")
+                            }
+                        }.joinToString(" · ")
+                        Text(
+                            text = detailParts,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(12.dp))
             AvisoMedico()
             Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        if (showContextEditor) {
+            ContextFactorsDialog(
+                franjaHoraria = franjaHoraria,
+                nivelEstres = nivelEstres,
+                nivelEnfermedad = nivelEnfermedad,
+                faseCiclo = faseCiclo,
+                nivelEjercicio = nivelEjercicio,
+                cicloHormonalActivo = cicloHormonalActivo,
+                enabled = !isSaving,
+                onFranjaHorariaChange = onFranjaHorariaChange,
+                onNivelEstresChange = onNivelEstresChange,
+                onNivelEnfermedadChange = onNivelEnfermedadChange,
+                onFaseCicloChange = onFaseCicloChange,
+                onNivelEjercicioChange = onNivelEjercicioChange,
+                onDismiss = { showContextEditor = false }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ContextFactorsDialog(
+    franjaHoraria: FranjaHoraria,
+    nivelEstres: NivelEstres,
+    nivelEnfermedad: NivelEnfermedad,
+    faseCiclo: FaseCicloHormonal,
+    nivelEjercicio: NivelEjercicio,
+    cicloHormonalActivo: Boolean,
+    enabled: Boolean,
+    onFranjaHorariaChange: (FranjaHoraria) -> Unit,
+    onNivelEstresChange: (NivelEstres) -> Unit,
+    onNivelEnfermedadChange: (NivelEnfermedad) -> Unit,
+    onFaseCicloChange: (FaseCicloHormonal) -> Unit,
+    onNivelEjercicioChange: (NivelEjercicio) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 640.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+            ),
+            shape = RoundedCornerShape(24.dp),
+            elevation = CardDefaults.cardElevation(8.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(16.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Factores contextuales",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Cerrar")
+                    }
+                }
+                Text(
+                    text = "Ajusta el contexto de esta comida sin perder el foco del registro.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                val colors = MaterialTheme.colorScheme
+
+                ContextFactorSelector(
+                    title = "Hora",
+                    selected = franjaHoraria,
+                    enabled = enabled,
+                    options = FranjaHoraria.entries.map {
+                        it to FactoresContextoInsulina.franjaLabel(it)
+                    },
+                    chipColor = { franjaChipColor(it, colors) },
+                    onSelect = onFranjaHorariaChange
+                )
+                ContextFactorSelector(
+                    title = "Estrés",
+                    selected = nivelEstres,
+                    enabled = enabled,
+                    options = NivelEstres.entries.map {
+                        it to FactoresContextoInsulina.estresLabel(it)
+                    },
+                    chipColor = { estresChipColor(it, colors) },
+                    onSelect = onNivelEstresChange
+                )
+                ContextFactorSelector(
+                    title = "Enfermedad",
+                    selected = nivelEnfermedad,
+                    enabled = enabled,
+                    options = NivelEnfermedad.entries.map {
+                        it to FactoresContextoInsulina.enfermedadLabel(it)
+                    },
+                    chipColor = { enfermedadChipColor(it, colors) },
+                    onSelect = onNivelEnfermedadChange
+                )
+                if (cicloHormonalActivo) {
+                    ContextFactorSelector(
+                        title = "Ciclo hormonal",
+                        selected = faseCiclo,
+                        enabled = enabled,
+                        options = FaseCicloHormonal.entries.map {
+                            it to FactoresContextoInsulina.cicloLabel(it)
+                        },
+                        chipColor = { cicloChipColor(it, colors) },
+                        onSelect = onFaseCicloChange
+                    )
+                }
+                ContextFactorSelector(
+                    title = "Ejercicio",
+                    selected = nivelEjercicio,
+                    enabled = enabled,
+                    options = NivelEjercicio.entries.map {
+                        it to FactoresContextoInsulina.ejercicioLabel(it)
+                    },
+                    chipColor = { ejercicioChipColor(it, colors) },
+                    onSelect = onNivelEjercicioChange
+                )
+
+                Button(
+                    onClick = onDismiss,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Aplicar")
+                }
+            }
         }
     }
 }
@@ -542,7 +814,7 @@ private fun CorrectionModeSelector(
             selected = conCorreccion,
             onClick = { onChange(true) },
             enabled = enabled,
-            label = { Text("Con corrección") },
+            label = { Text("Dosis ajustada") },
             modifier = Modifier.weight(1f),
             colors = FilterChipDefaults.filterChipColors(
                 selectedContainerColor = MaterialTheme.colorScheme.primaryContainer
@@ -552,10 +824,227 @@ private fun CorrectionModeSelector(
             selected = !conCorreccion,
             onClick = { onChange(false) },
             enabled = enabled,
-            label = { Text("Sin corrección") },
+            label = { Text("Dosis sin ajustar") },
             modifier = Modifier.weight(1f)
         )
     }
+}
+
+@Composable
+private fun <T> ContextFactorSelector(
+    title: String,
+    selected: T,
+    enabled: Boolean,
+    options: List<Pair<T, String>>,
+    chipColor: (T) -> Color,
+    onSelect: (T) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            options.forEach { (value, label) ->
+                val isSelected = value == selected
+                val color = chipColor(value)
+                FilterChip(
+                    selected = isSelected,
+                    onClick = { onSelect(value) },
+                    enabled = enabled,
+                    label = { Text(label) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        containerColor = color.copy(alpha = 0.10f),
+                        labelColor = color,
+                        selectedContainerColor = color.copy(alpha = 0.24f),
+                        selectedLabelColor = color
+                    )
+                )
+            }
+        }
+    }
+}
+
+private data class ContextSummaryChip(
+    val label: String,
+    val color: Color
+)
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun ContextInfoChipsRow(chips: List<ContextSummaryChip>) {
+    FlowRow(
+        modifier = Modifier
+            .fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        chips.forEach { chip ->
+            ContextInfoChip(
+                label = chip.label,
+                color = chip.color
+            )
+        }
+    }
+}
+
+@Composable
+private fun ContextInfoChip(
+    label: String,
+    color: Color
+) {
+    Surface(
+        color = color.copy(alpha = 0.16f),
+        contentColor = color,
+        shape = RoundedCornerShape(999.dp)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+        )
+    }
+}
+
+private fun buildContextSummaryChips(
+    franjaHoraria: FranjaHoraria,
+    nivelEstres: NivelEstres,
+    nivelEnfermedad: NivelEnfermedad,
+    faseCiclo: FaseCicloHormonal,
+    nivelEjercicio: NivelEjercicio,
+    colors: ColorScheme
+): List<ContextSummaryChip> {
+    return buildList {
+        add(
+            ContextSummaryChip(
+                label = "Hora: ${FactoresContextoInsulina.franjaLabel(franjaHoraria)}",
+                color = franjaChipColor(franjaHoraria, colors)
+            )
+        )
+        if (nivelEstres != NivelEstres.NINGUNO) {
+            add(
+                ContextSummaryChip(
+                    label = "Estrés: ${FactoresContextoInsulina.estresLabel(nivelEstres)}",
+                    color = estresChipColor(nivelEstres, colors)
+                )
+            )
+        }
+        if (nivelEnfermedad != NivelEnfermedad.NINGUNA) {
+            add(
+                ContextSummaryChip(
+                    label = "Enfermedad: ${FactoresContextoInsulina.enfermedadLabel(nivelEnfermedad)}",
+                    color = enfermedadChipColor(nivelEnfermedad, colors)
+                )
+            )
+        }
+        if (faseCiclo != FaseCicloHormonal.NO_APLICAR) {
+            add(
+                ContextSummaryChip(
+                    label = "Ciclo: ${FactoresContextoInsulina.cicloLabel(faseCiclo)}",
+                    color = cicloChipColor(faseCiclo, colors)
+                )
+            )
+        }
+        if (nivelEjercicio != NivelEjercicio.NINGUNO) {
+            add(
+                ContextSummaryChip(
+                    label = "Ejercicio: ${FactoresContextoInsulina.ejercicioLabel(nivelEjercicio)}",
+                    color = ejercicioChipColor(nivelEjercicio, colors)
+                )
+            )
+        }
+    }
+}
+
+private fun franjaChipColor(
+    franja: FranjaHoraria,
+    colors: ColorScheme
+): Color {
+    return when (franja) {
+        FranjaHoraria.MADRUGADA -> colors.tertiary
+        FranjaHoraria.MANANA -> WarningColor
+        FranjaHoraria.TARDE -> HidratosColor
+        FranjaHoraria.NOCHE -> colors.primary
+    }
+}
+
+private fun estresChipColor(
+    nivel: NivelEstres,
+    colors: ColorScheme
+): Color {
+    return when (nivel) {
+        NivelEstres.NINGUNO -> colors.outline
+        NivelEstres.LEVE -> colors.tertiary
+        NivelEstres.MODERADO -> moderateSeverityColor(colors)
+        NivelEstres.ALTO -> highSeverityColor(colors)
+    }
+}
+
+private fun enfermedadChipColor(
+    nivel: NivelEnfermedad,
+    colors: ColorScheme
+): Color {
+    return when (nivel) {
+        NivelEnfermedad.NINGUNA -> colors.outline
+        NivelEnfermedad.LEVE -> colors.tertiary
+        NivelEnfermedad.MODERADA -> moderateSeverityColor(colors)
+        NivelEnfermedad.ALTA -> highSeverityColor(colors)
+    }
+}
+
+private fun cicloChipColor(
+    fase: FaseCicloHormonal,
+    colors: ColorScheme
+): Color {
+    return when (fase) {
+        FaseCicloHormonal.NO_APLICAR -> colors.outline
+        FaseCicloHormonal.MENSTRUACION -> colors.error
+        FaseCicloHormonal.FOLICULAR -> colors.secondary
+        FaseCicloHormonal.OVULACION -> colors.primary
+        FaseCicloHormonal.LUTEA -> colors.tertiary
+    }
+}
+
+private fun ejercicioChipColor(
+    nivel: NivelEjercicio,
+    colors: ColorScheme
+): Color {
+    return when (nivel) {
+        NivelEjercicio.NINGUNO -> colors.outline
+        NivelEjercicio.SUAVE -> colors.tertiary
+        NivelEjercicio.MODERADO -> moderateSeverityColor(colors)
+        NivelEjercicio.INTENSO -> highSeverityColor(colors)
+    }
+}
+
+private fun moderateSeverityColor(colors: ColorScheme): Color {
+    val isLightPalette = colors.error.luminance() < 0.30f
+    return if (isLightPalette) WarningColor else colors.error
+}
+
+private fun highSeverityColor(colors: ColorScheme): Color {
+    val errorBase = colors.error
+    return if (errorBase.luminance() < 0.30f) {
+        errorBase
+    } else {
+        moreReddish(errorBase)
+    }
+}
+
+private fun moreReddish(base: Color): Color {
+    return Color(
+        red = (base.red + 0.08f).coerceAtMost(1f),
+        green = (base.green * 0.72f).coerceIn(0f, 1f),
+        blue = (base.blue * 0.72f).coerceIn(0f, 1f),
+        alpha = 1f
+    )
 }
 
 @Composable

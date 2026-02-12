@@ -1,6 +1,7 @@
 package com.diabetes.calculator.ui.screens.historial
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -26,19 +27,58 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.luminance
 import com.diabetes.calculator.data.dao.RegistroComidaConItems
 import com.diabetes.calculator.data.entity.EstadoDosis
-import com.diabetes.calculator.ui.components.AvisoMedicoCompacto
-import com.diabetes.calculator.ui.theme.HidratosColor
-import com.diabetes.calculator.ui.theme.InsulinaColor
-import com.diabetes.calculator.ui.theme.RacionesColor
+import com.diabetes.calculator.domain.FactoresContextoInsulina
+import com.diabetes.calculator.domain.FaseCicloHormonal
+import com.diabetes.calculator.domain.FranjaHoraria
+import com.diabetes.calculator.domain.NivelEjercicio
+import com.diabetes.calculator.domain.NivelEnfermedad
+import com.diabetes.calculator.domain.NivelEstres
 import com.diabetes.calculator.util.DateUtils
+import java.util.Locale
+
+private val HistorialHidratosColor = Color(0xFF4CAF50)
+private val HistorialInsulinaColor = Color(0xFFF57C00)
+private val HistorialRacionesColor = Color(0xFF2196F3)
+private val HistorialWarningColor = Color(0xFFFF9800)
+
+@Composable
+private fun HistorialMedicalNotice(modifier: Modifier = Modifier) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        ),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Info,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.width(16.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Recuerda consultar siempre con un profesional sanitario.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
 
 /**
  * Pantalla de historial de comidas con diseño Material You coherente.
@@ -105,7 +145,7 @@ fun HistorialScreen(
                 .fillMaxWidth()
                 .widthIn(max = 600.dp)
         ) {
-            AvisoMedicoCompacto(
+            HistorialMedicalNotice(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp)
@@ -566,6 +606,7 @@ private fun RegistroCard(
                 }
             }
 
+
             if (!registro.registro.notas.isNullOrBlank()) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -589,21 +630,21 @@ private fun RegistroCard(
                     modifier = Modifier.weight(1f),
                     label = "HIDRATOS",
                     value = "${String.format("%.1f", registro.registro.hidratosTotales)}g",
-                    color = HidratosColor,
+                    color = HistorialHidratosColor,
                     isMain = true
                 )
                 DataChip(
                     modifier = Modifier.weight(1f),
                     label = "RACIONES",
                     value = String.format("%.1f", registro.registro.racionesCalculadas),
-                    color = RacionesColor,
+                    color = HistorialRacionesColor,
                     isMain = true
                 )
                 DataChip(
                     modifier = Modifier.weight(1.2f),
                     label = "INSULINA",
                     value = "${String.format("%.1f", insulinBreakdown.total)} U",
-                    color = InsulinaColor,
+                    color = HistorialInsulinaColor,
                     isMain = true
                 )
             }
@@ -630,7 +671,7 @@ private fun RegistroDetalleBottomSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
-                .padding(bottom = 24.dp)
+                .padding(bottom = 32.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -669,13 +710,15 @@ private fun RegistroDetalleBottomSheet(
                         }
                     }
                 }
-                IconButton(onClick = onDismiss) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Cerrar detalle"
-                    )
-                }
+//                IconButton(onClick = onDismiss) {
+//                    Icon(
+//                        imageVector = Icons.Default.Close,
+//                        contentDescription = "Cerrar detalle"
+//                    )
+//                }
             }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
             val ratioText = buildRatioText(
                 registro = registro,
@@ -687,6 +730,59 @@ private fun RegistroDetalleBottomSheet(
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+
+            val insulinBreakdown = calculateInsulinBreakdown(registro)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                DataChip(
+                    modifier = Modifier.weight(1f),
+                    label = "HIDRATOS",
+                    value = "${String.format("%.1f", registro.registro.hidratosTotales)}g",
+                    color = HistorialHidratosColor,
+                    isMain = true
+                )
+                DataChip(
+                    modifier = Modifier.weight(1f),
+                    label = "RACIONES",
+                    value = String.format("%.1f", registro.registro.racionesCalculadas),
+                    color = HistorialRacionesColor,
+                    isMain = true
+                )
+                DataChip(
+                    modifier = Modifier.weight(1.2f),
+                    label = "INSULINA",
+                    value = "${String.format("%.1f", insulinBreakdown.total)} U",
+                    color = HistorialInsulinaColor,
+                    isMain = true
+                )
+            }
+
+            val contextoBadges = buildContextoBadges(
+                registro = registro,
+                colors = MaterialTheme.colorScheme
+            )
+            if (contextoBadges.isNotEmpty()) {
+                Text(
+                    text = "Factores contextuales",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    contextoBadges.forEach { badge ->
+                        ContextBadgeChip(
+                            label = badge.label,
+                            color = badge.color
+                        )
+                    }
+                }
             }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -707,47 +803,37 @@ private fun RegistroDetalleBottomSheet(
                 )
             }
 
-            val insulinBreakdown = calculateInsulinBreakdown(registro)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                DataChip(
-                    modifier = Modifier.weight(1f),
-                    label = "HIDRATOS",
-                    value = "${String.format("%.1f", registro.registro.hidratosTotales)}g",
-                    color = HidratosColor,
-                    isMain = true
-                )
-                DataChip(
-                    modifier = Modifier.weight(1f),
-                    label = "RACIONES",
-                    value = String.format("%.1f", registro.registro.racionesCalculadas),
-                    color = RacionesColor,
-                    isMain = true
-                )
-                DataChip(
-                    modifier = Modifier.weight(1.2f),
-                    label = "INSULINA",
-                    value = "${String.format("%.1f", insulinBreakdown.total)} U",
-                    color = InsulinaColor,
-                    isMain = true
-                )
-            }
-
             Text(
                 text = "Desglose de insulina",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold
             )
             StatDetailRow(
-                label = "Por comida",
+                label = "Alimentos",
                 value = formatUnits(insulinBreakdown.comida)
             )
             StatDetailRow(
-                label = "Por corrección",
+                label = "Corrección",
                 value = formatSignedUnits(insulinBreakdown.correccion)
             )
+            registro.registro.factorContextoTotalAplicado?.let { factorAplicado ->
+                StatDetailRow(
+                    label = "Factor contextual",
+                    value = "×${String.format(Locale.getDefault(), "%.2f", factorAplicado)}"
+                )
+            }
+            if (registro.registro.factorContextoCapado) {
+                val raw = registro.registro.factorContextoTotalRaw
+                val capText = if (raw != null) {
+                    "Sí (×${String.format(Locale.getDefault(), "%.2f", raw)})"
+                } else {
+                    "Sí"
+                }
+                StatDetailRow(
+                    label = "Límite de seguridad",
+                    value = capText
+                )
+            }
             if (estadoDosis == EstadoDosis.APLICADA) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -755,7 +841,7 @@ private fun RegistroDetalleBottomSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Corrección",
+                        text = "Insulina total",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -978,8 +1064,8 @@ private enum class DoseCorrectionOption(
     val label: String,
     val value: Boolean?
 ) {
-    WITH_CORRECTION("Con corrección", true),
-    WITHOUT_CORRECTION("Sin corrección", false),
+    WITH_CORRECTION("Dosis ajustada", true),
+    WITHOUT_CORRECTION("Dosis sin ajustar", false),
     UNSPECIFIED("Sin marcar", null)
 }
 
@@ -1140,6 +1226,170 @@ private fun buildRatioText(
     return if (parts.isEmpty()) null else parts.joinToString(" • ")
 }
 
+@Composable
+private fun ContextBadgeChip(
+    label: String,
+    color: androidx.compose.ui.graphics.Color
+) {
+    Surface(
+        color = color.copy(alpha = 0.16f),
+        contentColor = color,
+        shape = RoundedCornerShape(999.dp)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+        )
+    }
+}
+
+private data class ContextBadgeData(
+    val label: String,
+    val color: androidx.compose.ui.graphics.Color
+)
+
+private fun buildContextoBadges(
+    registro: RegistroComidaConItems,
+    colors: ColorScheme
+): List<ContextBadgeData> {
+    return buildList {
+        FranjaHoraria.fromStorage(registro.registro.franjaHorariaUsada)?.let { franja ->
+            add(
+                ContextBadgeData(
+                    label = "Hora: ${FactoresContextoInsulina.franjaLabel(franja)}",
+                    color = franjaChipColor(franja, colors)
+                )
+            )
+        }
+        NivelEstres.fromStorage(registro.registro.nivelEstresUsado)
+            ?.takeIf { it != NivelEstres.NINGUNO }
+            ?.let { estres ->
+                add(
+                    ContextBadgeData(
+                        label = "Estrés: ${FactoresContextoInsulina.estresLabel(estres)}",
+                        color = estresChipColor(estres, colors)
+                    )
+                )
+            }
+        NivelEnfermedad.fromStorage(registro.registro.nivelEnfermedadUsado)
+            ?.takeIf { it != NivelEnfermedad.NINGUNA }
+            ?.let { enfermedad ->
+                add(
+                    ContextBadgeData(
+                        label = "Enfermedad: ${FactoresContextoInsulina.enfermedadLabel(enfermedad)}",
+                        color = enfermedadChipColor(enfermedad, colors)
+                    )
+                )
+            }
+        FaseCicloHormonal.fromStorage(registro.registro.faseCicloUsada)
+            ?.takeIf { it != FaseCicloHormonal.NO_APLICAR }
+            ?.let { fase ->
+                add(
+                    ContextBadgeData(
+                        label = "Ciclo: ${FactoresContextoInsulina.cicloLabel(fase)}",
+                        color = cicloChipColor(fase, colors)
+                    )
+                )
+            }
+        NivelEjercicio.fromStorage(registro.registro.nivelEjercicioUsado)
+            ?.takeIf { it != NivelEjercicio.NINGUNO }
+            ?.let { ejercicio ->
+                add(
+                    ContextBadgeData(
+                        label = "Ejercicio: ${FactoresContextoInsulina.ejercicioLabel(ejercicio)}",
+                        color = ejercicioChipColor(ejercicio, colors)
+                    )
+                )
+            }
+    }
+}
+
+private fun franjaChipColor(
+    franja: FranjaHoraria,
+    colors: ColorScheme
+): androidx.compose.ui.graphics.Color {
+    return when (franja) {
+        FranjaHoraria.MADRUGADA -> colors.tertiary
+        FranjaHoraria.MANANA -> HistorialWarningColor
+        FranjaHoraria.TARDE -> HistorialHidratosColor
+        FranjaHoraria.NOCHE -> colors.primary
+    }
+}
+
+private fun estresChipColor(
+    nivel: NivelEstres,
+    colors: ColorScheme
+): androidx.compose.ui.graphics.Color {
+    return when (nivel) {
+        NivelEstres.NINGUNO -> colors.outline
+        NivelEstres.LEVE -> colors.tertiary
+        NivelEstres.MODERADO -> moderateSeverityColor(colors)
+        NivelEstres.ALTO -> highSeverityColor(colors)
+    }
+}
+
+private fun moreReddish(base: androidx.compose.ui.graphics.Color): androidx.compose.ui.graphics.Color {
+    return androidx.compose.ui.graphics.Color(
+        red = (base.red + 0.08f).coerceAtMost(1f),
+        green = (base.green * 0.72f).coerceIn(0f, 1f),
+        blue = (base.blue * 0.72f).coerceIn(0f, 1f),
+        alpha = 1f
+    )
+}
+
+private fun enfermedadChipColor(
+    nivel: NivelEnfermedad,
+    colors: ColorScheme
+): androidx.compose.ui.graphics.Color {
+    return when (nivel) {
+        NivelEnfermedad.NINGUNA -> colors.outline
+        NivelEnfermedad.LEVE -> colors.tertiary
+        NivelEnfermedad.MODERADA -> moderateSeverityColor(colors)
+        NivelEnfermedad.ALTA -> highSeverityColor(colors)
+    }
+}
+
+private fun cicloChipColor(
+    fase: FaseCicloHormonal,
+    colors: ColorScheme
+): androidx.compose.ui.graphics.Color {
+    return when (fase) {
+        FaseCicloHormonal.NO_APLICAR -> colors.outline
+        FaseCicloHormonal.MENSTRUACION -> colors.error
+        FaseCicloHormonal.FOLICULAR -> colors.secondary
+        FaseCicloHormonal.OVULACION -> colors.primary
+        FaseCicloHormonal.LUTEA -> colors.tertiary
+    }
+}
+
+private fun ejercicioChipColor(
+    nivel: NivelEjercicio,
+    colors: ColorScheme
+): androidx.compose.ui.graphics.Color {
+    return when (nivel) {
+        NivelEjercicio.NINGUNO -> colors.outline
+        NivelEjercicio.SUAVE -> colors.tertiary
+        NivelEjercicio.MODERADO -> moderateSeverityColor(colors)
+        NivelEjercicio.INTENSO -> highSeverityColor(colors)
+    }
+}
+
+private fun moderateSeverityColor(colors: ColorScheme): androidx.compose.ui.graphics.Color {
+    val isLightPalette = colors.error.luminance() < 0.30f
+    return if (isLightPalette) HistorialWarningColor else colors.error
+}
+
+private fun highSeverityColor(colors: ColorScheme): androidx.compose.ui.graphics.Color {
+    val errorBase = colors.error
+    return if (errorBase.luminance() < 0.30f) {
+        errorBase
+    } else {
+        moreReddish(errorBase)
+    }
+}
+
 private fun formatFactorCorreccion(value: Float): String {
     val isInteger = kotlin.math.abs(value - value.toInt().toFloat()) < 0.05f
     return if (isInteger) {
@@ -1242,19 +1492,19 @@ private fun buildItemMetricsText(
     val hText = "${String.format("%.1f", hidratos)} g HC"
 
     return buildAnnotatedString {
-        withStyle(SpanStyle(color = HidratosColor)) {
+        withStyle(SpanStyle(color = HistorialHidratosColor)) {
             append(hText)
         }
         withStyle(SpanStyle(color = separatorColor)) {
             append(" • ")
         }
-        withStyle(SpanStyle(color = RacionesColor)) {
+        withStyle(SpanStyle(color = HistorialRacionesColor)) {
             append("$rText R")
         }
         withStyle(SpanStyle(color = separatorColor)) {
             append(" • ")
         }
-        withStyle(SpanStyle(color = InsulinaColor)) {
+        withStyle(SpanStyle(color = HistorialInsulinaColor)) {
             append("$uText U")
         }
     }

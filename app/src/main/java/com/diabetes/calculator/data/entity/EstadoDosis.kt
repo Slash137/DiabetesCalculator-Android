@@ -9,7 +9,7 @@ enum class EstadoDosis(
 ) {
     PENDIENTE("pending", "Pendiente"),
     APLICADA("applied", "Aplicada"),
-    OMITIDA("skipped", "No aplicada");
+    OMITIDA("skipped", "Omitida");
 
     companion object {
         fun fromValue(value: String?): EstadoDosis {

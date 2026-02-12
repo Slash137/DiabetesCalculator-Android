@@ -64,6 +64,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import android.content.pm.PackageManager
 import com.diabetes.calculator.ui.components.AvisoMedico
@@ -108,6 +109,24 @@ fun PerfilScreen(
     val recordatorio2hActivo by viewModel.recordatorio2hActivo.collectAsState()
     val nightscoutUrl by viewModel.nightscoutUrl.collectAsState()
     val nightscoutToken by viewModel.nightscoutToken.collectAsState()
+    val factorHoraMadrugada by viewModel.factorHoraMadrugada.collectAsState()
+    val factorHoraManana by viewModel.factorHoraManana.collectAsState()
+    val factorHoraTarde by viewModel.factorHoraTarde.collectAsState()
+    val factorHoraNoche by viewModel.factorHoraNoche.collectAsState()
+    val factorEstresLeve by viewModel.factorEstresLeve.collectAsState()
+    val factorEstresModerado by viewModel.factorEstresModerado.collectAsState()
+    val factorEstresAlto by viewModel.factorEstresAlto.collectAsState()
+    val factorEnfermedadLeve by viewModel.factorEnfermedadLeve.collectAsState()
+    val factorEnfermedadModerada by viewModel.factorEnfermedadModerada.collectAsState()
+    val factorEnfermedadAlta by viewModel.factorEnfermedadAlta.collectAsState()
+    val cicloHormonalActivo by viewModel.cicloHormonalActivo.collectAsState()
+    val factorCicloMenstruacion by viewModel.factorCicloMenstruacion.collectAsState()
+    val factorCicloFolicular by viewModel.factorCicloFolicular.collectAsState()
+    val factorCicloOvulacion by viewModel.factorCicloOvulacion.collectAsState()
+    val factorCicloLutea by viewModel.factorCicloLutea.collectAsState()
+    val factorEjercicioSuave by viewModel.factorEjercicioSuave.collectAsState()
+    val factorEjercicioModerado by viewModel.factorEjercicioModerado.collectAsState()
+    val factorEjercicioIntenso by viewModel.factorEjercicioIntenso.collectAsState()
     val isSaving by viewModel.isSaving.collectAsState()
     val saveSuccess by viewModel.saveSuccess.collectAsState()
 
@@ -420,6 +439,24 @@ fun PerfilScreen(
                     objetivoInsulinaDia = objetivoInsulinaDia,
                     glucosaObjetivoMgdl = glucosaObjetivoMgdl,
                     factorCorreccionMgdlPorU = factorCorreccionMgdlPorU,
+                    factorHoraMadrugada = factorHoraMadrugada,
+                    factorHoraManana = factorHoraManana,
+                    factorHoraTarde = factorHoraTarde,
+                    factorHoraNoche = factorHoraNoche,
+                    factorEstresLeve = factorEstresLeve,
+                    factorEstresModerado = factorEstresModerado,
+                    factorEstresAlto = factorEstresAlto,
+                    factorEnfermedadLeve = factorEnfermedadLeve,
+                    factorEnfermedadModerada = factorEnfermedadModerada,
+                    factorEnfermedadAlta = factorEnfermedadAlta,
+                    cicloHormonalActivo = cicloHormonalActivo,
+                    factorCicloMenstruacion = factorCicloMenstruacion,
+                    factorCicloFolicular = factorCicloFolicular,
+                    factorCicloOvulacion = factorCicloOvulacion,
+                    factorCicloLutea = factorCicloLutea,
+                    factorEjercicioSuave = factorEjercicioSuave,
+                    factorEjercicioModerado = factorEjercicioModerado,
+                    factorEjercicioIntenso = factorEjercicioIntenso,
                     aplicarCorreccionPorDefecto = aplicarCorreccionPorDefecto,
                     recordatorio2hActivo = recordatorio2hActivo,
                     isSaving = isSaving,
@@ -432,6 +469,24 @@ fun PerfilScreen(
                     onObjetivoInsulinaDiaChange = viewModel::updateObjetivoInsulinaDia,
                     onGlucosaObjetivoMgdlChange = viewModel::updateGlucosaObjetivoMgdl,
                     onFactorCorreccionMgdlPorUChange = viewModel::updateFactorCorreccionMgdlPorU,
+                    onFactorHoraMadrugadaChange = viewModel::updateFactorHoraMadrugada,
+                    onFactorHoraMananaChange = viewModel::updateFactorHoraManana,
+                    onFactorHoraTardeChange = viewModel::updateFactorHoraTarde,
+                    onFactorHoraNocheChange = viewModel::updateFactorHoraNoche,
+                    onFactorEstresLeveChange = viewModel::updateFactorEstresLeve,
+                    onFactorEstresModeradoChange = viewModel::updateFactorEstresModerado,
+                    onFactorEstresAltoChange = viewModel::updateFactorEstresAlto,
+                    onFactorEnfermedadLeveChange = viewModel::updateFactorEnfermedadLeve,
+                    onFactorEnfermedadModeradaChange = viewModel::updateFactorEnfermedadModerada,
+                    onFactorEnfermedadAltaChange = viewModel::updateFactorEnfermedadAlta,
+                    onCicloHormonalActivoChange = viewModel::updateCicloHormonalActivo,
+                    onFactorCicloMenstruacionChange = viewModel::updateFactorCicloMenstruacion,
+                    onFactorCicloFolicularChange = viewModel::updateFactorCicloFolicular,
+                    onFactorCicloOvulacionChange = viewModel::updateFactorCicloOvulacion,
+                    onFactorCicloLuteaChange = viewModel::updateFactorCicloLutea,
+                    onFactorEjercicioSuaveChange = viewModel::updateFactorEjercicioSuave,
+                    onFactorEjercicioModeradoChange = viewModel::updateFactorEjercicioModerado,
+                    onFactorEjercicioIntensoChange = viewModel::updateFactorEjercicioIntenso,
                     onAplicarCorreccionPorDefectoChange = viewModel::updateAplicarCorreccionPorDefecto,
                     onRecordatorio2hChange = onRecordatorio2hChange@{ enabled ->
                         if (enabled && android.os.Build.VERSION.SDK_INT >= 33) {
@@ -510,6 +565,24 @@ private fun PerfilContent(
     objetivoInsulinaDia: String,
     glucosaObjetivoMgdl: String,
     factorCorreccionMgdlPorU: String,
+    factorHoraMadrugada: String,
+    factorHoraManana: String,
+    factorHoraTarde: String,
+    factorHoraNoche: String,
+    factorEstresLeve: String,
+    factorEstresModerado: String,
+    factorEstresAlto: String,
+    factorEnfermedadLeve: String,
+    factorEnfermedadModerada: String,
+    factorEnfermedadAlta: String,
+    cicloHormonalActivo: Boolean,
+    factorCicloMenstruacion: String,
+    factorCicloFolicular: String,
+    factorCicloOvulacion: String,
+    factorCicloLutea: String,
+    factorEjercicioSuave: String,
+    factorEjercicioModerado: String,
+    factorEjercicioIntenso: String,
     aplicarCorreccionPorDefecto: Boolean,
     recordatorio2hActivo: Boolean,
     isSaving: Boolean,
@@ -522,6 +595,24 @@ private fun PerfilContent(
     onObjetivoInsulinaDiaChange: (String) -> Unit,
     onGlucosaObjetivoMgdlChange: (String) -> Unit,
     onFactorCorreccionMgdlPorUChange: (String) -> Unit,
+    onFactorHoraMadrugadaChange: (String) -> Unit,
+    onFactorHoraMananaChange: (String) -> Unit,
+    onFactorHoraTardeChange: (String) -> Unit,
+    onFactorHoraNocheChange: (String) -> Unit,
+    onFactorEstresLeveChange: (String) -> Unit,
+    onFactorEstresModeradoChange: (String) -> Unit,
+    onFactorEstresAltoChange: (String) -> Unit,
+    onFactorEnfermedadLeveChange: (String) -> Unit,
+    onFactorEnfermedadModeradaChange: (String) -> Unit,
+    onFactorEnfermedadAltaChange: (String) -> Unit,
+    onCicloHormonalActivoChange: (Boolean) -> Unit,
+    onFactorCicloMenstruacionChange: (String) -> Unit,
+    onFactorCicloFolicularChange: (String) -> Unit,
+    onFactorCicloOvulacionChange: (String) -> Unit,
+    onFactorCicloLuteaChange: (String) -> Unit,
+    onFactorEjercicioSuaveChange: (String) -> Unit,
+    onFactorEjercicioModeradoChange: (String) -> Unit,
+    onFactorEjercicioIntensoChange: (String) -> Unit,
     onAplicarCorreccionPorDefectoChange: (Boolean) -> Unit,
     onRecordatorio2hChange: (Boolean) -> Unit,
     onSave: () -> Unit,
@@ -543,6 +634,9 @@ private fun PerfilContent(
     pendingMaxAttempts: Int,
     onRefreshNightscout: () -> Unit
 ) {
+    var showContextFactorsDialog by remember { mutableStateOf(false) }
+    var showDefaultsTable by remember { mutableStateOf(false) }
+
     Box(
         modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.TopCenter
@@ -731,6 +825,499 @@ private fun PerfilContent(
                     }
 
                 }
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer
+                ),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "Factores contextuales de dosis",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Configura ajustes por hora, estrés, enfermedad, ciclo y ejercicio.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Hora: ${factorHoraMadrugada}/${factorHoraManana}/${factorHoraTarde}/${factorHoraNoche} · " +
+                            "Estrés: ${factorEstresLeve}/${factorEstresModerado}/${factorEstresAlto} · " +
+                            "Ejercicio: ${factorEjercicioSuave}/${factorEjercicioModerado}/${factorEjercicioIntenso}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedButton(
+                        onClick = { showContextFactorsDialog = !showContextFactorsDialog },
+                        enabled = !isSaving,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (showContextFactorsDialog) "Ocultar configuración avanzada" else "Configurar factores")
+                    }
+                }
+            }
+
+            if (showContextFactorsDialog) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Rango recomendado: 0.5 a 1.5. La app aplica límite global ±40% al calcular.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Text(
+                        text = "Hora del día",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    BoxWithConstraints {
+                        val isWide = maxWidth >= 520.dp
+                        val spacing = 12.dp
+                        if (isWide) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(spacing)
+                            ) {
+                                FactorDecimalField(
+                                    value = factorHoraMadrugada,
+                                    onValueChange = onFactorHoraMadrugadaChange,
+                                    label = "Madrugada",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                FactorDecimalField(
+                                    value = factorHoraManana,
+                                    onValueChange = onFactorHoraMananaChange,
+                                    label = "Mañana",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(spacing)
+                            ) {
+                                FactorDecimalField(
+                                    value = factorHoraTarde,
+                                    onValueChange = onFactorHoraTardeChange,
+                                    label = "Tarde",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                FactorDecimalField(
+                                    value = factorHoraNoche,
+                                    onValueChange = onFactorHoraNocheChange,
+                                    label = "Noche",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
+                                FactorDecimalField(
+                                    value = factorHoraMadrugada,
+                                    onValueChange = onFactorHoraMadrugadaChange,
+                                    label = "Madrugada",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                FactorDecimalField(
+                                    value = factorHoraManana,
+                                    onValueChange = onFactorHoraMananaChange,
+                                    label = "Mañana",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                FactorDecimalField(
+                                    value = factorHoraTarde,
+                                    onValueChange = onFactorHoraTardeChange,
+                                    label = "Tarde",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                FactorDecimalField(
+                                    value = factorHoraNoche,
+                                    onValueChange = onFactorHoraNocheChange,
+                                    label = "Noche",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = "Estrés",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    BoxWithConstraints {
+                        val isWide = maxWidth >= 560.dp
+                        val spacing = 12.dp
+                        if (isWide) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(spacing)
+                            ) {
+                                FactorDecimalField(
+                                    value = factorEstresLeve,
+                                    onValueChange = onFactorEstresLeveChange,
+                                    label = "Leve",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                FactorDecimalField(
+                                    value = factorEstresModerado,
+                                    onValueChange = onFactorEstresModeradoChange,
+                                    label = "Moderado",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                FactorDecimalField(
+                                    value = factorEstresAlto,
+                                    onValueChange = onFactorEstresAltoChange,
+                                    label = "Alto",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
+                                FactorDecimalField(
+                                    value = factorEstresLeve,
+                                    onValueChange = onFactorEstresLeveChange,
+                                    label = "Leve",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                FactorDecimalField(
+                                    value = factorEstresModerado,
+                                    onValueChange = onFactorEstresModeradoChange,
+                                    label = "Moderado",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                FactorDecimalField(
+                                    value = factorEstresAlto,
+                                    onValueChange = onFactorEstresAltoChange,
+                                    label = "Alto",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = "Enfermedad",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    BoxWithConstraints {
+                        val isWide = maxWidth >= 560.dp
+                        val spacing = 12.dp
+                        if (isWide) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(spacing)
+                            ) {
+                                FactorDecimalField(
+                                    value = factorEnfermedadLeve,
+                                    onValueChange = onFactorEnfermedadLeveChange,
+                                    label = "Leve",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                FactorDecimalField(
+                                    value = factorEnfermedadModerada,
+                                    onValueChange = onFactorEnfermedadModeradaChange,
+                                    label = "Moderada",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                FactorDecimalField(
+                                    value = factorEnfermedadAlta,
+                                    onValueChange = onFactorEnfermedadAltaChange,
+                                    label = "Alta",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
+                                FactorDecimalField(
+                                    value = factorEnfermedadLeve,
+                                    onValueChange = onFactorEnfermedadLeveChange,
+                                    label = "Leve",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                FactorDecimalField(
+                                    value = factorEnfermedadModerada,
+                                    onValueChange = onFactorEnfermedadModeradaChange,
+                                    label = "Moderada",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                FactorDecimalField(
+                                    value = factorEnfermedadAlta,
+                                    onValueChange = onFactorEnfermedadAltaChange,
+                                    label = "Alta",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Activar ciclo hormonal",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = "Si está desactivado se usa x1.00.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = cicloHormonalActivo,
+                            onCheckedChange = onCicloHormonalActivoChange,
+                            enabled = !isSaving,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = MaterialTheme.colorScheme.primary,
+                                checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
+                            )
+                        )
+                    }
+
+                    if (cicloHormonalActivo) {
+                        Text(
+                            text = "Ciclo hormonal",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        BoxWithConstraints {
+                            val isWide = maxWidth >= 520.dp
+                            val spacing = 12.dp
+                            if (isWide) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(spacing)
+                                ) {
+                                    FactorDecimalField(
+                                        value = factorCicloMenstruacion,
+                                        onValueChange = onFactorCicloMenstruacionChange,
+                                        label = "Menstruación",
+                                        suffix = "x",
+                                        enabled = !isSaving,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    FactorDecimalField(
+                                        value = factorCicloFolicular,
+                                        onValueChange = onFactorCicloFolicularChange,
+                                        label = "Folicular",
+                                        suffix = "x",
+                                        enabled = !isSaving,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(spacing)
+                                ) {
+                                    FactorDecimalField(
+                                        value = factorCicloOvulacion,
+                                        onValueChange = onFactorCicloOvulacionChange,
+                                        label = "Ovulación",
+                                        suffix = "x",
+                                        enabled = !isSaving,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    FactorDecimalField(
+                                        value = factorCicloLutea,
+                                        onValueChange = onFactorCicloLuteaChange,
+                                        label = "Lútea",
+                                        suffix = "x",
+                                        enabled = !isSaving,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            } else {
+                                Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
+                                    FactorDecimalField(
+                                        value = factorCicloMenstruacion,
+                                        onValueChange = onFactorCicloMenstruacionChange,
+                                        label = "Menstruación",
+                                        suffix = "x",
+                                        enabled = !isSaving,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    FactorDecimalField(
+                                        value = factorCicloFolicular,
+                                        onValueChange = onFactorCicloFolicularChange,
+                                        label = "Folicular",
+                                        suffix = "x",
+                                        enabled = !isSaving,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    FactorDecimalField(
+                                        value = factorCicloOvulacion,
+                                        onValueChange = onFactorCicloOvulacionChange,
+                                        label = "Ovulación",
+                                        suffix = "x",
+                                        enabled = !isSaving,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    FactorDecimalField(
+                                        value = factorCicloLutea,
+                                        onValueChange = onFactorCicloLuteaChange,
+                                        label = "Lútea",
+                                        suffix = "x",
+                                        enabled = !isSaving,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = "Ejercicio",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    BoxWithConstraints {
+                        val isWide = maxWidth >= 560.dp
+                        val spacing = 12.dp
+                        if (isWide) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(spacing)
+                            ) {
+                                FactorDecimalField(
+                                    value = factorEjercicioSuave,
+                                    onValueChange = onFactorEjercicioSuaveChange,
+                                    label = "Suave",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                FactorDecimalField(
+                                    value = factorEjercicioModerado,
+                                    onValueChange = onFactorEjercicioModeradoChange,
+                                    label = "Moderado",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                FactorDecimalField(
+                                    value = factorEjercicioIntenso,
+                                    onValueChange = onFactorEjercicioIntensoChange,
+                                    label = "Intenso",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
+                                FactorDecimalField(
+                                    value = factorEjercicioSuave,
+                                    onValueChange = onFactorEjercicioSuaveChange,
+                                    label = "Suave",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                FactorDecimalField(
+                                    value = factorEjercicioModerado,
+                                    onValueChange = onFactorEjercicioModeradoChange,
+                                    label = "Moderado",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                FactorDecimalField(
+                                    value = factorEjercicioIntenso,
+                                    onValueChange = onFactorEjercicioIntensoChange,
+                                    label = "Intenso",
+                                    suffix = "x",
+                                    enabled = !isSaving,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Niveles y valores por defecto",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        TextButton(
+                            onClick = { showDefaultsTable = !showDefaultsTable }
+                        ) {
+                            Text(if (showDefaultsTable) "Ocultar tabla" else "Mostrar tabla")
+                        }
+                    }
+                    if (showDefaultsTable) {
+                        FactorDefaultsTable()
+                    }
+                }
+            }
             }
 
             Card(
@@ -1120,6 +1707,117 @@ private fun PerfilContent(
 
             Spacer(modifier = Modifier.height(16.dp))
         }
+    }
+}
+
+@Composable
+private fun FactorDecimalField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    suffix: String,
+    enabled: Boolean,
+    modifier: Modifier = Modifier
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        modifier = modifier,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        singleLine = true,
+        enabled = enabled,
+        shape = RoundedCornerShape(12.dp),
+        suffix = { Text(suffix) }
+    )
+}
+
+@Composable
+private fun FactorDefaultsTable() {
+    val rows = listOf(
+        Triple("Hora", "Madrugada / Mañana / Tarde / Noche", "1.00 / 1.00 / 1.00 / 1.00"),
+        Triple("Estrés", "Ninguno / Leve / Moderado / Alto", "1.00 / 1.10 / 1.20 / 1.30"),
+        Triple("Enfermedad", "Ninguna / Leve / Moderada / Alta", "1.00 / 1.10 / 1.20 / 1.30"),
+        Triple("Ciclo", "No aplicar / Menstruación / Folicular / Ovulación / Lútea", "1.00 / 0.95 / 1.00 / 1.05 / 1.15"),
+        Triple("Ejercicio", "Ninguno / Suave / Moderado / Intenso", "1.00 / 0.90 / 0.80 / 0.70")
+    )
+
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            FactorDefaultsRow(
+                factor = "Factor",
+                niveles = "Niveles",
+                defaults = "Por defecto",
+                isHeader = true
+            )
+            rows.forEachIndexed { index, (factor, niveles, defaults) ->
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                FactorDefaultsRow(
+                    factor = factor,
+                    niveles = niveles,
+                    defaults = defaults,
+                    isHeader = false
+                )
+                if (index == rows.lastIndex) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FactorDefaultsRow(
+    factor: String,
+    niveles: String,
+    defaults: String,
+    isHeader: Boolean
+) {
+    val textStyle = if (isHeader) {
+        MaterialTheme.typography.labelMedium
+    } else {
+        MaterialTheme.typography.bodySmall
+    }
+    val textColor = if (isHeader) {
+        MaterialTheme.colorScheme.onSurface
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Text(
+            text = factor,
+            modifier = Modifier.weight(0.9f),
+            style = textStyle,
+            color = textColor,
+            fontWeight = fontWeight
+        )
+        Text(
+            text = niveles,
+            modifier = Modifier.weight(1.8f),
+            style = textStyle,
+            color = textColor,
+            fontWeight = fontWeight
+        )
+        Text(
+            text = defaults,
+            modifier = Modifier.weight(1.3f),
+            style = textStyle,
+            color = textColor,
+            fontWeight = fontWeight
+        )
     }
 }
 

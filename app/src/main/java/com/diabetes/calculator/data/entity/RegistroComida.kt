@@ -43,5 +43,18 @@ data class RegistroComida(
     val dosisConCorreccion: Boolean? = null,
     val unidadesCorreccionSugerida: Float? = null,
     val factorCorreccionMgdlPorUUsado: Float? = null,
+    val franjaHorariaUsada: String? = null,
+    val nivelEstresUsado: String? = null,
+    val nivelEnfermedadUsado: String? = null,
+    val faseCicloUsada: String? = null,
+    val nivelEjercicioUsado: String? = null,
+    val factorHoraUsado: Float? = null,
+    val factorEstresUsado: Float? = null,
+    val factorEnfermedadUsado: Float? = null,
+    val factorCicloUsado: Float? = null,
+    val factorEjercicioUsado: Float? = null,
+    val factorContextoTotalRaw: Float? = null,
+    val factorContextoTotalAplicado: Float? = null,
+    val factorContextoCapado: Boolean = false,
     val dosisConfirmadaAt: Long? = null
 )

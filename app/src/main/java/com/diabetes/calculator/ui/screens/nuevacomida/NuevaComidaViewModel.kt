@@ -22,12 +22,26 @@ import com.diabetes.calculator.data.repository.PendingGlucoseRepository
 import com.diabetes.calculator.data.repository.PlantillaRepository
 import com.diabetes.calculator.data.repository.RegistroComidaRepository
 import com.diabetes.calculator.data.repository.UsuarioProfileRepository
+import com.diabetes.calculator.domain.FactoresContextoInsulina
+import com.diabetes.calculator.domain.FaseCicloHormonal
+import com.diabetes.calculator.domain.FranjaHoraria
+import com.diabetes.calculator.domain.NivelEjercicio
+import com.diabetes.calculator.domain.NivelEnfermedad
+import com.diabetes.calculator.domain.NivelEstres
+import com.diabetes.calculator.domain.SeleccionContextoInsulina
 import com.diabetes.calculator.util.DateUtils
 import com.diabetes.calculator.util.NightscoutRetryPolicy
+import com.diabetes.calculator.work.Glucosa2hWorker
 import com.diabetes.calculator.work.NightscoutRetryWorker
 import com.diabetes.calculator.work.Recordatorio2hWorker
-import com.diabetes.calculator.work.Glucosa2hWorker
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
@@ -48,7 +62,7 @@ sealed class NuevaComidaUiState {
     object Loading : NuevaComidaUiState()
     object NoProfile : NuevaComidaUiState()
     data class Ready(
-        val alimentos: List<Alimento>, // Estos son los filtrados para el selector
+        val alimentos: List<Alimento>,
         val profile: UsuarioProfile
     ) : NuevaComidaUiState()
     data class Error(val message: String) : NuevaComidaUiState()
@@ -64,7 +78,20 @@ data class CalculoActual(
     val unidadesCorreccion: Float = 0f,
     val unidadesInsulina: Float = 0f,
     val unidadesInsulinaSinCorreccion: Float = 0f,
-    val glucosaUsadaMgdl: Int? = null
+    val glucosaUsadaMgdl: Int? = null,
+    val franjaHoraria: FranjaHoraria = FactoresContextoInsulina.defaultSelection().franjaHoraria,
+    val nivelEstres: NivelEstres = NivelEstres.NINGUNO,
+    val nivelEnfermedad: NivelEnfermedad = NivelEnfermedad.NINGUNA,
+    val faseCiclo: FaseCicloHormonal = FaseCicloHormonal.NO_APLICAR,
+    val nivelEjercicio: NivelEjercicio = NivelEjercicio.NINGUNO,
+    val factorHora: Float = 1f,
+    val factorEstres: Float = 1f,
+    val factorEnfermedad: Float = 1f,
+    val factorCiclo: Float = 1f,
+    val factorEjercicio: Float = 1f,
+    val factorContextoTotalRaw: Float = 1f,
+    val factorContextoTotalAplicado: Float = 1f,
+    val factorContextoCapado: Boolean = false
 )
 
 /**
@@ -80,15 +107,13 @@ class NuevaComidaViewModel(
     private val pendingGlucoseRepository: PendingGlucoseRepository,
     private val workManager: WorkManager
 ) : ViewModel() {
-    
+
     private val _uiState = MutableStateFlow<NuevaComidaUiState>(NuevaComidaUiState.Loading)
     val uiState: StateFlow<NuevaComidaUiState> = _uiState.asStateFlow()
-    
-    // Lista de alimentos en la comida actual
+
     private val _items = MutableStateFlow<List<ItemComidaTemporal>>(listOf(ItemComidaTemporal()))
     val items: StateFlow<List<ItemComidaTemporal>> = _items.asStateFlow()
-    
-    // Búsqueda de alimentos
+
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
@@ -98,37 +123,51 @@ class NuevaComidaViewModel(
             SharingStarted.WhileSubscribed(5_000),
             emptyList()
         )
-    
-    // Notas generales del registro
+
     private val _notas = MutableStateFlow("")
     val notas: StateFlow<String> = _notas.asStateFlow()
-    
-    // Cálculo total
+
     private val _calculo = MutableStateFlow(CalculoActual())
     val calculo: StateFlow<CalculoActual> = _calculo.asStateFlow()
+
+    private val initialContext = FactoresContextoInsulina.defaultSelection()
+    private val _franjaHoraria = MutableStateFlow(initialContext.franjaHoraria)
+    val franjaHoraria: StateFlow<FranjaHoraria> = _franjaHoraria.asStateFlow()
+
+    private val _nivelEstres = MutableStateFlow(initialContext.nivelEstres)
+    val nivelEstres: StateFlow<NivelEstres> = _nivelEstres.asStateFlow()
+
+    private val _nivelEnfermedad = MutableStateFlow(initialContext.nivelEnfermedad)
+    val nivelEnfermedad: StateFlow<NivelEnfermedad> = _nivelEnfermedad.asStateFlow()
+
+    private val _faseCiclo = MutableStateFlow(initialContext.faseCiclo)
+    val faseCiclo: StateFlow<FaseCicloHormonal> = _faseCiclo.asStateFlow()
+
+    private val _nivelEjercicio = MutableStateFlow(initialContext.nivelEjercicio)
+    val nivelEjercicio: StateFlow<NivelEjercicio> = _nivelEjercicio.asStateFlow()
 
     private val _glucosaActualMgdl = MutableStateFlow<Int?>(null)
     private val _dosisConCorreccion = MutableStateFlow(false)
     val dosisConCorreccion: StateFlow<Boolean> = _dosisConCorreccion.asStateFlow()
     private var correctionSelectionEdited = false
-    
-    // Estados de UI auxiliares
+
     private val _isSaving = MutableStateFlow(false)
     val isSaving: StateFlow<Boolean> = _isSaving.asStateFlow()
-    
+
     private val _saveSuccess = MutableStateFlow(false)
     val saveSuccess: StateFlow<Boolean> = _saveSuccess.asStateFlow()
 
     private val _uiEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
-    val uiEvents: SharedFlow<String> = _uiEvents.asSharedFlow()
+    val uiEvents = _uiEvents.asSharedFlow()
 
     private var cachedProfile: UsuarioProfile? = null
     private var cachedAlimentos: List<Alimento> = emptyList()
-    
+    private var contextInitialized = false
+
     init {
         loadData()
     }
-    
+
     private fun loadData() {
         viewModelScope.launch {
             combine(
@@ -140,9 +179,19 @@ class NuevaComidaViewModel(
             }.collect { (profile, allAlimentos, query) ->
                 if (profile == null) {
                     cachedProfile = null
+                    contextInitialized = false
                     _uiState.value = NuevaComidaUiState.NoProfile
                 } else {
+                    val wasNull = cachedProfile == null
                     cachedProfile = profile
+                    if (wasNull || !contextInitialized) {
+                        resetContextSelections()
+                        contextInitialized = true
+                    }
+                    if (!profile.cicloHormonalActivo && _faseCiclo.value != FaseCicloHormonal.NO_APLICAR) {
+                        _faseCiclo.value = FaseCicloHormonal.NO_APLICAR
+                    }
+
                     recalculate()
                     cachedAlimentos = allAlimentos
                     val filtered = if (query.isBlank()) {
@@ -155,7 +204,7 @@ class NuevaComidaViewModel(
             }
         }
     }
-    
+
     fun updateSearchQuery(query: String) {
         _searchQuery.value = query
     }
@@ -169,7 +218,7 @@ class NuevaComidaViewModel(
         _glucosaActualMgdl.value = glucosaMgdl
         recalculate()
     }
-    
+
     fun updateNotas(notas: String) {
         _notas.value = notas
     }
@@ -178,13 +227,48 @@ class NuevaComidaViewModel(
         correctionSelectionEdited = true
         _dosisConCorreccion.value = conCorreccion
     }
-    
+
+    fun updateFranjaHoraria(value: FranjaHoraria) {
+        if (_franjaHoraria.value == value) return
+        _franjaHoraria.value = value
+        recalculate()
+    }
+
+    fun updateNivelEstres(value: NivelEstres) {
+        if (_nivelEstres.value == value) return
+        _nivelEstres.value = value
+        recalculate()
+    }
+
+    fun updateNivelEnfermedad(value: NivelEnfermedad) {
+        if (_nivelEnfermedad.value == value) return
+        _nivelEnfermedad.value = value
+        recalculate()
+    }
+
+    fun updateFaseCiclo(value: FaseCicloHormonal) {
+        val profile = cachedProfile ?: return
+        if (!profile.cicloHormonalActivo) {
+            _faseCiclo.value = FaseCicloHormonal.NO_APLICAR
+            return
+        }
+        if (_faseCiclo.value == value) return
+        _faseCiclo.value = value
+        recalculate()
+    }
+
+    fun updateNivelEjercicio(value: NivelEjercicio) {
+        if (_nivelEjercicio.value == value) return
+        _nivelEjercicio.value = value
+        recalculate()
+    }
+
     fun addItem() {
         val current = _items.value.toMutableList()
         current.add(ItemComidaTemporal())
         _items.value = current
     }
-    
+
     fun removeItem(item: ItemComidaTemporal) {
         val current = _items.value.toMutableList()
         if (current.size > 1) {
@@ -241,7 +325,7 @@ class NuevaComidaViewModel(
             _uiEvents.tryEmit("Plantilla eliminada")
         }
     }
-    
+
     fun updateItemAlimento(item: ItemComidaTemporal, alimento: Alimento) {
         val current = _items.value.toMutableList()
         val index = current.indexOfFirst { it.id == item.id }
@@ -253,10 +337,10 @@ class NuevaComidaViewModel(
             recalculate()
         }
     }
-    
+
     fun updateItemGramos(item: ItemComidaTemporal, gramosStr: String) {
         if (gramosStr.isNotEmpty() && !gramosStr.matches(Regex("^\\d*([\\.,]\\d*)?$"))) return
-        
+
         val current = _items.value.toMutableList()
         val index = current.indexOfFirst { it.id == item.id }
         if (index != -1) {
@@ -268,7 +352,7 @@ class NuevaComidaViewModel(
             recalculate()
         }
     }
-    
+
     private fun recalculate() {
         val profile = cachedProfile ?: return
         val totalHidratos = _items.value.sumOf { it.hidratos.toDouble() }.toFloat()
@@ -282,7 +366,7 @@ class NuevaComidaViewModel(
             _dosisConCorreccion.value = profile.aplicarCorreccionPorDefecto && hasRealtimeCorrection(nuevoCalculo)
         }
     }
-    
+
     fun canSave(): Boolean {
         val profile = cachedProfile ?: return false
         if (profile.gramosPorRacion <= 0f || profile.ratioInsulina <= 0f) {
@@ -290,7 +374,7 @@ class NuevaComidaViewModel(
         }
         return _items.value.any { it.alimento != null && (parseDecimal(it.gramosStr) ?: 0f) > 0f }
     }
-    
+
     fun saveRegistro() {
         val profile = cachedProfile ?: return
         val validItems = _items.value.filter { it.alimento != null && (parseDecimal(it.gramosStr) ?: 0f) > 0f }
@@ -354,19 +438,32 @@ class NuevaComidaViewModel(
                     glucosaAntesMgdl = glucosaAntes,
                     dosisConCorreccion = _dosisConCorreccion.value,
                     unidadesCorreccionSugerida = calc.unidadesCorreccion,
-                    factorCorreccionMgdlPorUUsado = profile.factorCorreccionMgdlPorU
+                    factorCorreccionMgdlPorUUsado = profile.factorCorreccionMgdlPorU,
+                    franjaHorariaUsada = calc.franjaHoraria.key,
+                    nivelEstresUsado = calc.nivelEstres.key,
+                    nivelEnfermedadUsado = calc.nivelEnfermedad.key,
+                    faseCicloUsada = calc.faseCiclo.key,
+                    nivelEjercicioUsado = calc.nivelEjercicio.key,
+                    factorHoraUsado = calc.factorHora,
+                    factorEstresUsado = calc.factorEstres,
+                    factorEnfermedadUsado = calc.factorEnfermedad,
+                    factorCicloUsado = calc.factorCiclo,
+                    factorEjercicioUsado = calc.factorEjercicio,
+                    factorContextoTotalRaw = calc.factorContextoTotalRaw,
+                    factorContextoTotalAplicado = calc.factorContextoTotalAplicado,
+                    factorContextoCapado = calc.factorContextoCapado
                 )
-                
+
                 val itemsEntities = validItems.map {
                     val gramos = parseDecimal(it.gramosStr) ?: 0f
                     AlimentoEnRegistro(
-                        registroId = 0, // Se asigna en el repositorio/DAO
+                        registroId = 0,
                         alimentoId = it.alimento!!.id,
                         gramosConsumidos = gramos,
                         hidratosCalculados = it.hidratos
                     )
                 }
-                
+
                 val registroId = registroRepository.insertRegistroCompleto(registro, itemsEntities)
                 if (nightscoutEnabled) {
                     scheduleGlucosa2h(registroId)
@@ -415,18 +512,49 @@ class NuevaComidaViewModel(
             0f
         }
         val unidadesCorreccion = calculateCorrectionUnits(profile, glucosaMgdl)
-        val unidadesInsulinaSinCorreccion = roundToHalf(unidadesComida.coerceAtLeast(0f))
-        val totalSinRedondear = (unidadesComida + unidadesCorreccion).coerceAtLeast(0f)
-        val unidadesInsulina = roundToHalf(totalSinRedondear)
+        val contexto = FactoresContextoInsulina.resolve(profile, currentSelection(profile))
+        val dosisContextual = FactoresContextoInsulina.applyFactorToDoses(
+            unidadesComida = unidadesComida,
+            unidadesCorreccion = unidadesCorreccion,
+            factorTotalAplicado = contexto.factorTotalAplicado
+        )
 
         return CalculoActual(
             hidratosTotales = totalHidratos,
             raciones = raciones,
             unidadesComida = unidadesComida,
             unidadesCorreccion = unidadesCorreccion,
-            unidadesInsulina = unidadesInsulina,
-            unidadesInsulinaSinCorreccion = unidadesInsulinaSinCorreccion,
-            glucosaUsadaMgdl = glucosaMgdl
+            unidadesInsulina = dosisContextual.totalConCorreccion,
+            unidadesInsulinaSinCorreccion = dosisContextual.totalSinCorreccion,
+            glucosaUsadaMgdl = glucosaMgdl,
+            franjaHoraria = _franjaHoraria.value,
+            nivelEstres = _nivelEstres.value,
+            nivelEnfermedad = _nivelEnfermedad.value,
+            faseCiclo = if (profile.cicloHormonalActivo) _faseCiclo.value else FaseCicloHormonal.NO_APLICAR,
+            nivelEjercicio = _nivelEjercicio.value,
+            factorHora = contexto.factorHora,
+            factorEstres = contexto.factorEstres,
+            factorEnfermedad = contexto.factorEnfermedad,
+            factorCiclo = contexto.factorCiclo,
+            factorEjercicio = contexto.factorEjercicio,
+            factorContextoTotalRaw = contexto.factorTotalRaw,
+            factorContextoTotalAplicado = contexto.factorTotalAplicado,
+            factorContextoCapado = contexto.factorCapado
+        )
+    }
+
+    private fun currentSelection(profile: UsuarioProfile): SeleccionContextoInsulina {
+        val fase = if (profile.cicloHormonalActivo) {
+            _faseCiclo.value
+        } else {
+            FaseCicloHormonal.NO_APLICAR
+        }
+        return SeleccionContextoInsulina(
+            franjaHoraria = _franjaHoraria.value,
+            nivelEstres = _nivelEstres.value,
+            nivelEnfermedad = _nivelEnfermedad.value,
+            faseCiclo = fase,
+            nivelEjercicio = _nivelEjercicio.value
         )
     }
 
@@ -450,10 +578,15 @@ class NuevaComidaViewModel(
         }
     }
 
-    private fun roundToHalf(value: Float): Float {
-        return kotlin.math.round(value * 2f) / 2f
+    private fun resetContextSelections() {
+        val defaults = FactoresContextoInsulina.defaultSelection()
+        _franjaHoraria.value = defaults.franjaHoraria
+        _nivelEstres.value = defaults.nivelEstres
+        _nivelEnfermedad.value = defaults.nivelEnfermedad
+        _faseCiclo.value = defaults.faseCiclo
+        _nivelEjercicio.value = defaults.nivelEjercicio
     }
-    
+
     private fun resetForm() {
         _items.value = listOf(ItemComidaTemporal())
         _notas.value = ""
@@ -461,8 +594,10 @@ class NuevaComidaViewModel(
         _dosisConCorreccion.value = false
         correctionSelectionEdited = false
         _searchQuery.value = ""
+        resetContextSelections()
+        recalculate()
     }
-    
+
     fun resetSaveSuccess() {
         _saveSuccess.value = false
     }
@@ -547,7 +682,7 @@ class NuevaComidaViewModel(
         val delayMinutes = NightscoutRetryPolicy.nextDelayMinutes(maxAttempts)
         NightscoutRetryWorker.enqueue(workManager, delayMinutes)
     }
-    
+
     class Factory(
         private val usuarioRepository: UsuarioProfileRepository,
         private val alimentoRepository: AlimentoRepository,

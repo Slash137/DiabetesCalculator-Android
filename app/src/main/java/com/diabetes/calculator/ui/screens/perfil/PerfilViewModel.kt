@@ -1,5 +1,6 @@
 package com.diabetes.calculator.ui.screens.perfil
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -18,7 +19,6 @@ import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import android.content.Context
 
 /**
  * Estados posibles de la pantalla de perfil.
@@ -37,17 +37,16 @@ class PerfilViewModel(
     private val repository: UsuarioProfileRepository,
     private val backupManager: BackupManager
 ) : ViewModel() {
-    
+
     private val _uiState = MutableStateFlow<PerfilUiState>(PerfilUiState.Loading)
     val uiState: StateFlow<PerfilUiState> = _uiState.asStateFlow()
-    
-    // Campos del formulario
+
     private val _nombre = MutableStateFlow("")
     val nombre: StateFlow<String> = _nombre.asStateFlow()
-    
+
     private val _gramosPorRacion = MutableStateFlow("")
     val gramosPorRacion: StateFlow<String> = _gramosPorRacion.asStateFlow()
-    
+
     private val _ratioInsulina = MutableStateFlow("")
     val ratioInsulina: StateFlow<String> = _ratioInsulina.asStateFlow()
 
@@ -71,36 +70,85 @@ class PerfilViewModel(
 
     private val _recordatorio2hActivo = MutableStateFlow(false)
     val recordatorio2hActivo: StateFlow<Boolean> = _recordatorio2hActivo.asStateFlow()
-    
+
     private val _nightscoutUrl = MutableStateFlow("")
     val nightscoutUrl: StateFlow<String> = _nightscoutUrl.asStateFlow()
-    
+
     private val _nightscoutToken = MutableStateFlow("")
     val nightscoutToken: StateFlow<String> = _nightscoutToken.asStateFlow()
-    
-    // Estado de guardado
+
+    private val _factorHoraMadrugada = MutableStateFlow("1.0")
+    val factorHoraMadrugada: StateFlow<String> = _factorHoraMadrugada.asStateFlow()
+
+    private val _factorHoraManana = MutableStateFlow("1.0")
+    val factorHoraManana: StateFlow<String> = _factorHoraManana.asStateFlow()
+
+    private val _factorHoraTarde = MutableStateFlow("1.0")
+    val factorHoraTarde: StateFlow<String> = _factorHoraTarde.asStateFlow()
+
+    private val _factorHoraNoche = MutableStateFlow("1.0")
+    val factorHoraNoche: StateFlow<String> = _factorHoraNoche.asStateFlow()
+
+    private val _factorEstresLeve = MutableStateFlow("1.10")
+    val factorEstresLeve: StateFlow<String> = _factorEstresLeve.asStateFlow()
+
+    private val _factorEstresModerado = MutableStateFlow("1.20")
+    val factorEstresModerado: StateFlow<String> = _factorEstresModerado.asStateFlow()
+
+    private val _factorEstresAlto = MutableStateFlow("1.30")
+    val factorEstresAlto: StateFlow<String> = _factorEstresAlto.asStateFlow()
+
+    private val _factorEnfermedadLeve = MutableStateFlow("1.10")
+    val factorEnfermedadLeve: StateFlow<String> = _factorEnfermedadLeve.asStateFlow()
+
+    private val _factorEnfermedadModerada = MutableStateFlow("1.20")
+    val factorEnfermedadModerada: StateFlow<String> = _factorEnfermedadModerada.asStateFlow()
+
+    private val _factorEnfermedadAlta = MutableStateFlow("1.30")
+    val factorEnfermedadAlta: StateFlow<String> = _factorEnfermedadAlta.asStateFlow()
+
+    private val _cicloHormonalActivo = MutableStateFlow(false)
+    val cicloHormonalActivo: StateFlow<Boolean> = _cicloHormonalActivo.asStateFlow()
+
+    private val _factorCicloMenstruacion = MutableStateFlow("0.95")
+    val factorCicloMenstruacion: StateFlow<String> = _factorCicloMenstruacion.asStateFlow()
+
+    private val _factorCicloFolicular = MutableStateFlow("1.00")
+    val factorCicloFolicular: StateFlow<String> = _factorCicloFolicular.asStateFlow()
+
+    private val _factorCicloOvulacion = MutableStateFlow("1.05")
+    val factorCicloOvulacion: StateFlow<String> = _factorCicloOvulacion.asStateFlow()
+
+    private val _factorCicloLutea = MutableStateFlow("1.15")
+    val factorCicloLutea: StateFlow<String> = _factorCicloLutea.asStateFlow()
+
+    private val _factorEjercicioSuave = MutableStateFlow("0.90")
+    val factorEjercicioSuave: StateFlow<String> = _factorEjercicioSuave.asStateFlow()
+
+    private val _factorEjercicioModerado = MutableStateFlow("0.80")
+    val factorEjercicioModerado: StateFlow<String> = _factorEjercicioModerado.asStateFlow()
+
+    private val _factorEjercicioIntenso = MutableStateFlow("0.70")
+    val factorEjercicioIntenso: StateFlow<String> = _factorEjercicioIntenso.asStateFlow()
+
     private val _isSaving = MutableStateFlow(false)
     val isSaving: StateFlow<Boolean> = _isSaving.asStateFlow()
-    
+
     private val _saveSuccess = MutableStateFlow(false)
     val saveSuccess: StateFlow<Boolean> = _saveSuccess.asStateFlow()
-    
-    // Estado de export/import
+
     private val _backupStatus = MutableStateFlow<String?>(null)
     val backupStatus: StateFlow<String?> = _backupStatus.asStateFlow()
-    
+
     private val _isBackupLoading = MutableStateFlow(false)
     val isBackupLoading: StateFlow<Boolean> = _isBackupLoading.asStateFlow()
 
     private var profileJob: Job? = null
-    
+
     init {
         loadProfile()
     }
-    
-    /**
-     * Carga el perfil existente, si lo hay.
-     */
+
     private fun loadProfile() {
         if (profileJob?.isActive == true) return
         profileJob = viewModelScope.launch {
@@ -118,9 +166,28 @@ class PerfilViewModel(
                     _recordatorio2hActivo.value = profile.recordatorio2hActivo
                     _nightscoutUrl.value = profile.nightscoutUrl ?: ""
                     _nightscoutToken.value = profile.nightscoutToken ?: ""
+
+                    _factorHoraMadrugada.value = profile.factorHoraMadrugada.toString()
+                    _factorHoraManana.value = profile.factorHoraManana.toString()
+                    _factorHoraTarde.value = profile.factorHoraTarde.toString()
+                    _factorHoraNoche.value = profile.factorHoraNoche.toString()
+                    _factorEstresLeve.value = profile.factorEstresLeve.toString()
+                    _factorEstresModerado.value = profile.factorEstresModerado.toString()
+                    _factorEstresAlto.value = profile.factorEstresAlto.toString()
+                    _factorEnfermedadLeve.value = profile.factorEnfermedadLeve.toString()
+                    _factorEnfermedadModerada.value = profile.factorEnfermedadModerada.toString()
+                    _factorEnfermedadAlta.value = profile.factorEnfermedadAlta.toString()
+                    _cicloHormonalActivo.value = profile.cicloHormonalActivo
+                    _factorCicloMenstruacion.value = profile.factorCicloMenstruacion.toString()
+                    _factorCicloFolicular.value = profile.factorCicloFolicular.toString()
+                    _factorCicloOvulacion.value = profile.factorCicloOvulacion.toString()
+                    _factorCicloLutea.value = profile.factorCicloLutea.toString()
+                    _factorEjercicioSuave.value = profile.factorEjercicioSuave.toString()
+                    _factorEjercicioModerado.value = profile.factorEjercicioModerado.toString()
+                    _factorEjercicioIntenso.value = profile.factorEjercicioIntenso.toString()
+
                     _uiState.value = PerfilUiState.Success(profile)
                 } else {
-                    // Valores por defecto sugeridos
                     _gramosPorRacion.value = "10"
                     _ratioInsulina.value = "1.0"
                     _objetivoHidratosDia.value = ""
@@ -130,44 +197,60 @@ class PerfilViewModel(
                     _factorCorreccionMgdlPorU.value = ""
                     _aplicarCorreccionPorDefecto.value = true
                     _recordatorio2hActivo.value = false
+                    _factorHoraMadrugada.value = "1.0"
+                    _factorHoraManana.value = "1.0"
+                    _factorHoraTarde.value = "1.0"
+                    _factorHoraNoche.value = "1.0"
+                    _factorEstresLeve.value = "1.10"
+                    _factorEstresModerado.value = "1.20"
+                    _factorEstresAlto.value = "1.30"
+                    _factorEnfermedadLeve.value = "1.10"
+                    _factorEnfermedadModerada.value = "1.20"
+                    _factorEnfermedadAlta.value = "1.30"
+                    _cicloHormonalActivo.value = false
+                    _factorCicloMenstruacion.value = "0.95"
+                    _factorCicloFolicular.value = "1.00"
+                    _factorCicloOvulacion.value = "1.05"
+                    _factorCicloLutea.value = "1.15"
+                    _factorEjercicioSuave.value = "0.90"
+                    _factorEjercicioModerado.value = "0.80"
+                    _factorEjercicioIntenso.value = "0.70"
                     _uiState.value = PerfilUiState.Empty
                 }
             }
         }
     }
-    
+
     fun updateNombre(value: String) {
         _nombre.value = value
     }
-    
+
     fun updateGramosPorRacion(value: String) {
-        // Solo permite números y un separador decimal (coma o punto)
-        if (value.isEmpty() || value.matches(Regex("^\\d*([\\.,]\\d*)?$"))) {
+        if (isDecimalInput(value)) {
             _gramosPorRacion.value = value
         }
     }
-    
+
     fun updateRatioInsulina(value: String) {
-        // Solo permite números y un separador decimal (coma o punto)
-        if (value.isEmpty() || value.matches(Regex("^\\d*([\\.,]\\d*)?$"))) {
+        if (isDecimalInput(value)) {
             _ratioInsulina.value = value
         }
     }
 
     fun updateObjetivoHidratosDia(value: String) {
-        if (value.isEmpty() || value.matches(Regex("^\\d*([\\.,]\\d*)?$"))) {
+        if (isDecimalInput(value)) {
             _objetivoHidratosDia.value = value
         }
     }
 
     fun updateObjetivoRacionesDia(value: String) {
-        if (value.isEmpty() || value.matches(Regex("^\\d*([\\.,]\\d*)?$"))) {
+        if (isDecimalInput(value)) {
             _objetivoRacionesDia.value = value
         }
     }
 
     fun updateObjetivoInsulinaDia(value: String) {
-        if (value.isEmpty() || value.matches(Regex("^\\d*([\\.,]\\d*)?$"))) {
+        if (isDecimalInput(value)) {
             _objetivoInsulinaDia.value = value
         }
     }
@@ -179,7 +262,7 @@ class PerfilViewModel(
     }
 
     fun updateFactorCorreccionMgdlPorU(value: String) {
-        if (value.isEmpty() || value.matches(Regex("^\\d*([\\.,]\\d*)?$"))) {
+        if (isDecimalInput(value)) {
             _factorCorreccionMgdlPorU.value = value
         }
     }
@@ -191,37 +274,104 @@ class PerfilViewModel(
     fun updateRecordatorio2hActivo(value: Boolean) {
         _recordatorio2hActivo.value = value
     }
-    
+
     fun updateNightscoutUrl(value: String) {
         _nightscoutUrl.value = value
     }
-    
+
     fun updateNightscoutToken(value: String) {
         _nightscoutToken.value = value
     }
-    
-    /**
-     * Valida los campos del formulario.
-     */
+
+    fun updateFactorHoraMadrugada(value: String) {
+        if (isDecimalInput(value)) _factorHoraMadrugada.value = value
+    }
+
+    fun updateFactorHoraManana(value: String) {
+        if (isDecimalInput(value)) _factorHoraManana.value = value
+    }
+
+    fun updateFactorHoraTarde(value: String) {
+        if (isDecimalInput(value)) _factorHoraTarde.value = value
+    }
+
+    fun updateFactorHoraNoche(value: String) {
+        if (isDecimalInput(value)) _factorHoraNoche.value = value
+    }
+
+    fun updateFactorEstresLeve(value: String) {
+        if (isDecimalInput(value)) _factorEstresLeve.value = value
+    }
+
+    fun updateFactorEstresModerado(value: String) {
+        if (isDecimalInput(value)) _factorEstresModerado.value = value
+    }
+
+    fun updateFactorEstresAlto(value: String) {
+        if (isDecimalInput(value)) _factorEstresAlto.value = value
+    }
+
+    fun updateFactorEnfermedadLeve(value: String) {
+        if (isDecimalInput(value)) _factorEnfermedadLeve.value = value
+    }
+
+    fun updateFactorEnfermedadModerada(value: String) {
+        if (isDecimalInput(value)) _factorEnfermedadModerada.value = value
+    }
+
+    fun updateFactorEnfermedadAlta(value: String) {
+        if (isDecimalInput(value)) _factorEnfermedadAlta.value = value
+    }
+
+    fun updateCicloHormonalActivo(value: Boolean) {
+        _cicloHormonalActivo.value = value
+    }
+
+    fun updateFactorCicloMenstruacion(value: String) {
+        if (isDecimalInput(value)) _factorCicloMenstruacion.value = value
+    }
+
+    fun updateFactorCicloFolicular(value: String) {
+        if (isDecimalInput(value)) _factorCicloFolicular.value = value
+    }
+
+    fun updateFactorCicloOvulacion(value: String) {
+        if (isDecimalInput(value)) _factorCicloOvulacion.value = value
+    }
+
+    fun updateFactorCicloLutea(value: String) {
+        if (isDecimalInput(value)) _factorCicloLutea.value = value
+    }
+
+    fun updateFactorEjercicioSuave(value: String) {
+        if (isDecimalInput(value)) _factorEjercicioSuave.value = value
+    }
+
+    fun updateFactorEjercicioModerado(value: String) {
+        if (isDecimalInput(value)) _factorEjercicioModerado.value = value
+    }
+
+    fun updateFactorEjercicioIntenso(value: String) {
+        if (isDecimalInput(value)) _factorEjercicioIntenso.value = value
+    }
+
     fun validateFields(): Boolean {
         val nombreVal = _nombre.value.trim()
         val gramosVal = parseDecimal(_gramosPorRacion.value)
         val ratioVal = parseDecimal(_ratioInsulina.value)
-        
-        return nombreVal.isNotEmpty() && 
-               gramosVal != null && gramosVal > 0 &&
-               ratioVal != null && ratioVal > 0
+
+        return nombreVal.isNotEmpty() &&
+            gramosVal != null && gramosVal > 0 &&
+            ratioVal != null && ratioVal > 0 &&
+            validateContextFactors()
     }
-    
-    /**
-     * Guarda el perfil en la base de datos.
-     */
+
     fun saveProfile() {
         if (!validateFields()) {
             _uiState.value = PerfilUiState.Error("Por favor, completa todos los campos correctamente")
             return
         }
-        
+
         viewModelScope.launch {
             _isSaving.value = true
             try {
@@ -233,10 +383,57 @@ class PerfilViewModel(
                 val objetivoInsulina = parseDecimal(_objetivoInsulinaDia.value)
                 val glucosaObjetivo = _glucosaObjetivoMgdl.value.trim().toIntOrNull()
                 val factorCorreccion = parseDecimal(_factorCorreccionMgdlPorU.value)
+
+                val factorHoraMadrugada = parsePositiveFactor(_factorHoraMadrugada.value)
+                val factorHoraManana = parsePositiveFactor(_factorHoraManana.value)
+                val factorHoraTarde = parsePositiveFactor(_factorHoraTarde.value)
+                val factorHoraNoche = parsePositiveFactor(_factorHoraNoche.value)
+                val factorEstresLeve = parsePositiveFactor(_factorEstresLeve.value)
+                val factorEstresModerado = parsePositiveFactor(_factorEstresModerado.value)
+                val factorEstresAlto = parsePositiveFactor(_factorEstresAlto.value)
+                val factorEnfermedadLeve = parsePositiveFactor(_factorEnfermedadLeve.value)
+                val factorEnfermedadModerada = parsePositiveFactor(_factorEnfermedadModerada.value)
+                val factorEnfermedadAlta = parsePositiveFactor(_factorEnfermedadAlta.value)
+                val factorCicloMenstruacion = parsePositiveFactor(_factorCicloMenstruacion.value)
+                val factorCicloFolicular = parsePositiveFactor(_factorCicloFolicular.value)
+                val factorCicloOvulacion = parsePositiveFactor(_factorCicloOvulacion.value)
+                val factorCicloLutea = parsePositiveFactor(_factorCicloLutea.value)
+                val factorEjercicioSuave = parsePositiveFactor(_factorEjercicioSuave.value)
+                val factorEjercicioModerado = parsePositiveFactor(_factorEjercicioModerado.value)
+                val factorEjercicioIntenso = parsePositiveFactor(_factorEjercicioIntenso.value)
+
                 if (gramos == null || ratio == null) {
                     _uiState.value = PerfilUiState.Error("Formato numérico no válido")
                     return@launch
                 }
+
+                val contextFactors = listOf(
+                    factorHoraMadrugada,
+                    factorHoraManana,
+                    factorHoraTarde,
+                    factorHoraNoche,
+                    factorEstresLeve,
+                    factorEstresModerado,
+                    factorEstresAlto,
+                    factorEnfermedadLeve,
+                    factorEnfermedadModerada,
+                    factorEnfermedadAlta,
+                    factorCicloMenstruacion,
+                    factorCicloFolicular,
+                    factorCicloOvulacion,
+                    factorCicloLutea,
+                    factorEjercicioSuave,
+                    factorEjercicioModerado,
+                    factorEjercicioIntenso
+                )
+
+                if (contextFactors.any { it == null || it <= 0f }) {
+                    _uiState.value = PerfilUiState.Error(
+                        "Los factores contextuales deben ser numéricos y mayores que 0"
+                    )
+                    return@launch
+                }
+
                 if ((objetivoHidratos != null && objetivoHidratos < 0f) ||
                     (objetivoRaciones != null && objetivoRaciones < 0f) ||
                     (objetivoInsulina != null && objetivoInsulina < 0f)
@@ -262,8 +459,9 @@ class PerfilViewModel(
                     )
                     return@launch
                 }
+
                 val profile = UsuarioProfile(
-                    id = currentProfile?.id ?: 1, // Mantener ID existente o usar 1
+                    id = currentProfile?.id ?: 1,
                     nombre = _nombre.value.trim(),
                     gramosPorRacion = gramos,
                     ratioInsulina = ratio,
@@ -275,7 +473,25 @@ class PerfilViewModel(
                     aplicarCorreccionPorDefecto = _aplicarCorreccionPorDefecto.value,
                     recordatorio2hActivo = _recordatorio2hActivo.value,
                     nightscoutUrl = _nightscoutUrl.value.trim().ifEmpty { null },
-                    nightscoutToken = _nightscoutToken.value.trim().ifEmpty { null }
+                    nightscoutToken = _nightscoutToken.value.trim().ifEmpty { null },
+                    factorHoraMadrugada = factorHoraMadrugada!!,
+                    factorHoraManana = factorHoraManana!!,
+                    factorHoraTarde = factorHoraTarde!!,
+                    factorHoraNoche = factorHoraNoche!!,
+                    factorEstresLeve = factorEstresLeve!!,
+                    factorEstresModerado = factorEstresModerado!!,
+                    factorEstresAlto = factorEstresAlto!!,
+                    factorEnfermedadLeve = factorEnfermedadLeve!!,
+                    factorEnfermedadModerada = factorEnfermedadModerada!!,
+                    factorEnfermedadAlta = factorEnfermedadAlta!!,
+                    cicloHormonalActivo = _cicloHormonalActivo.value,
+                    factorCicloMenstruacion = factorCicloMenstruacion!!,
+                    factorCicloFolicular = factorCicloFolicular!!,
+                    factorCicloOvulacion = factorCicloOvulacion!!,
+                    factorCicloLutea = factorCicloLutea!!,
+                    factorEjercicioSuave = factorEjercicioSuave!!,
+                    factorEjercicioModerado = factorEjercicioModerado!!,
+                    factorEjercicioIntenso = factorEjercicioIntenso!!
                 )
                 repository.insertProfile(profile)
                 _saveSuccess.value = true
@@ -290,15 +506,42 @@ class PerfilViewModel(
     private fun parseDecimal(value: String): Float? {
         return value.trim().replace(',', '.').toFloatOrNull()
     }
-    
+
+    private fun parsePositiveFactor(value: String): Float? {
+        return parseDecimal(value)?.takeIf { it > 0f }
+    }
+
+    private fun isDecimalInput(value: String): Boolean {
+        return value.isEmpty() || value.matches(Regex("^\\d*([\\.,]\\d*)?$"))
+    }
+
+    private fun validateContextFactors(): Boolean {
+        val factors = listOf(
+            _factorHoraMadrugada.value,
+            _factorHoraManana.value,
+            _factorHoraTarde.value,
+            _factorHoraNoche.value,
+            _factorEstresLeve.value,
+            _factorEstresModerado.value,
+            _factorEstresAlto.value,
+            _factorEnfermedadLeve.value,
+            _factorEnfermedadModerada.value,
+            _factorEnfermedadAlta.value,
+            _factorCicloMenstruacion.value,
+            _factorCicloFolicular.value,
+            _factorCicloOvulacion.value,
+            _factorCicloLutea.value,
+            _factorEjercicioSuave.value,
+            _factorEjercicioModerado.value,
+            _factorEjercicioIntenso.value
+        )
+        return factors.all { parsePositiveFactor(it) != null }
+    }
+
     fun resetSaveSuccess() {
         _saveSuccess.value = false
     }
 
-    /**
-     * Exporta los datos de la app a un archivo.
-     * Se define como suspend para evitar que el stream se cierre prematuramente en la UI.
-     */
     suspend fun exportData(outputStream: OutputStream, password: String) {
         _isBackupLoading.value = true
         _backupStatus.value = null
@@ -312,9 +555,6 @@ class PerfilViewModel(
         }
     }
 
-    /**
-     * Exporta los datos a CSV.
-     */
     suspend fun exportCsv(outputStream: OutputStream) {
         _isBackupLoading.value = true
         _backupStatus.value = null
@@ -328,10 +568,6 @@ class PerfilViewModel(
         }
     }
 
-    /**
-     * Importa los datos de la app desde un archivo.
-     * Se define como suspend para evitar que el stream se cierre prematuramente en la UI.
-     */
     suspend fun importData(inputStream: InputStream, password: String?) {
         _isBackupLoading.value = true
         _backupStatus.value = null
@@ -385,10 +621,7 @@ class PerfilViewModel(
         if (backups.size <= keep) return
         backups.drop(keep).forEach { it.delete() }
     }
-    
-    /**
-     * Factory para crear el ViewModel con dependencias.
-     */
+
     class Factory(
         private val repository: UsuarioProfileRepository,
         private val backupManager: BackupManager
