@@ -4,10 +4,12 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.work.WorkManager
 import com.diabetes.calculator.data.entity.UsuarioProfile
 import com.diabetes.calculator.data.repository.UsuarioProfileRepository
 import com.diabetes.calculator.util.BackupManager
 import com.diabetes.calculator.util.BackupPasswordStore
+import com.diabetes.calculator.work.NightscoutSyncWorker
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,7 +37,8 @@ sealed class PerfilUiState {
  */
 class PerfilViewModel(
     private val repository: UsuarioProfileRepository,
-    private val backupManager: BackupManager
+    private val backupManager: BackupManager,
+    private val workManager: WorkManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<PerfilUiState>(PerfilUiState.Loading)
@@ -76,6 +79,9 @@ class PerfilViewModel(
 
     private val _nightscoutToken = MutableStateFlow("")
     val nightscoutToken: StateFlow<String> = _nightscoutToken.asStateFlow()
+
+    private val _nightscoutSyncRegistrosActivo = MutableStateFlow(false)
+    val nightscoutSyncRegistrosActivo: StateFlow<Boolean> = _nightscoutSyncRegistrosActivo.asStateFlow()
 
     private val _factorHoraMadrugada = MutableStateFlow("1.0")
     val factorHoraMadrugada: StateFlow<String> = _factorHoraMadrugada.asStateFlow()
@@ -166,6 +172,7 @@ class PerfilViewModel(
                     _recordatorio2hActivo.value = profile.recordatorio2hActivo
                     _nightscoutUrl.value = profile.nightscoutUrl ?: ""
                     _nightscoutToken.value = profile.nightscoutToken ?: ""
+                    _nightscoutSyncRegistrosActivo.value = profile.nightscoutSyncRegistrosActivo
 
                     _factorHoraMadrugada.value = profile.factorHoraMadrugada.toString()
                     _factorHoraManana.value = profile.factorHoraManana.toString()
@@ -197,6 +204,7 @@ class PerfilViewModel(
                     _factorCorreccionMgdlPorU.value = ""
                     _aplicarCorreccionPorDefecto.value = true
                     _recordatorio2hActivo.value = false
+                    _nightscoutSyncRegistrosActivo.value = false
                     _factorHoraMadrugada.value = "1.0"
                     _factorHoraManana.value = "1.0"
                     _factorHoraTarde.value = "1.0"
@@ -281,6 +289,10 @@ class PerfilViewModel(
 
     fun updateNightscoutToken(value: String) {
         _nightscoutToken.value = value
+    }
+
+    fun updateNightscoutSyncRegistrosActivo(value: Boolean) {
+        _nightscoutSyncRegistrosActivo.value = value
     }
 
     fun updateFactorHoraMadrugada(value: String) {
@@ -376,6 +388,7 @@ class PerfilViewModel(
             _isSaving.value = true
             try {
                 val currentProfile = repository.getProfileSync()
+                val wasSyncActive = currentProfile?.nightscoutSyncRegistrosActivo == true
                 val gramos = parseDecimal(_gramosPorRacion.value)
                 val ratio = parseDecimal(_ratioInsulina.value)
                 val objetivoHidratos = parseDecimal(_objetivoHidratosDia.value)
@@ -474,6 +487,8 @@ class PerfilViewModel(
                     recordatorio2hActivo = _recordatorio2hActivo.value,
                     nightscoutUrl = _nightscoutUrl.value.trim().ifEmpty { null },
                     nightscoutToken = _nightscoutToken.value.trim().ifEmpty { null },
+                    nightscoutSyncRegistrosActivo = _nightscoutSyncRegistrosActivo.value,
+                    nightscoutSyncBackfillDoneAt = currentProfile?.nightscoutSyncBackfillDoneAt,
                     factorHoraMadrugada = factorHoraMadrugada!!,
                     factorHoraManana = factorHoraManana!!,
                     factorHoraTarde = factorHoraTarde!!,
@@ -494,6 +509,10 @@ class PerfilViewModel(
                     factorEjercicioIntenso = factorEjercicioIntenso!!
                 )
                 repository.insertProfile(profile)
+                if (!wasSyncActive && profile.nightscoutSyncRegistrosActivo) {
+                    NightscoutSyncWorker.enqueuePeriodic(workManager)
+                    NightscoutSyncWorker.enqueueNow(workManager)
+                }
                 _saveSuccess.value = true
             } catch (e: Exception) {
                 _uiState.value = PerfilUiState.Error("Error al guardar: ${e.message}")
@@ -624,12 +643,13 @@ class PerfilViewModel(
 
     class Factory(
         private val repository: UsuarioProfileRepository,
-        private val backupManager: BackupManager
+        private val backupManager: BackupManager,
+        private val workManager: WorkManager
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(PerfilViewModel::class.java)) {
-                return PerfilViewModel(repository, backupManager) as T
+                return PerfilViewModel(repository, backupManager, workManager) as T
             }
             throw IllegalArgumentException("Clase de ViewModel desconocida")
         }

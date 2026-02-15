@@ -38,6 +38,15 @@ interface RegistroComidaDao {
     @Transaction
     @Query("SELECT * FROM registro_comida WHERE id = :id")
     suspend fun getById(id: Int): RegistroComidaConItems?
+
+    @Query("SELECT * FROM registro_comida WHERE id = :id")
+    suspend fun getRegistroRawById(id: Int): RegistroComida?
+
+    @Query("SELECT * FROM registro_comida WHERE nightscoutTreatmentId = :treatmentId LIMIT 1")
+    suspend fun getByNightscoutTreatmentId(treatmentId: String): RegistroComida?
+
+    @Query("SELECT * FROM registro_comida WHERE fecha BETWEEN :from AND :to ORDER BY fecha ASC")
+    suspend fun getRegistrosInRangeRaw(from: Long, to: Long): List<RegistroComida>
     
     @Insert
     suspend fun insertRegistro(registro: RegistroComida): Long
@@ -64,6 +73,24 @@ interface RegistroComidaDao {
 
     @Query("SELECT * FROM registro_comida")
     suspend fun getAllRegistrosRaw(): List<RegistroComida>
+
+    @Query(
+        """
+        UPDATE registro_comida
+        SET nightscoutTreatmentId = :treatmentId,
+            unidadesInsulinaRemota = :unidadesInsulinaRemota,
+            nightscoutReconciliadoAt = :reconciliadoAt,
+            nightscoutSyncDcid = :dcid
+        WHERE id = :registroId
+        """
+    )
+    suspend fun updateNightscoutLink(
+        registroId: Int,
+        treatmentId: String?,
+        unidadesInsulinaRemota: Float?,
+        reconciliadoAt: Long?,
+        dcid: String?
+    )
 
     @Query("SELECT * FROM alimento_en_registro")
     suspend fun getAllItemsRaw(): List<AlimentoEnRegistro>
@@ -121,6 +148,18 @@ interface RegistroComidaDao {
         conCorreccion: Boolean?
     )
 
+    @Query("""
+        UPDATE registro_comida
+        SET unidadesInsulina = :unidades,
+            dosisConfirmadaAt = :confirmadaAt
+        WHERE id = :registroId
+    """)
+    suspend fun updateDoseForLink(
+        registroId: Int,
+        unidades: Float,
+        confirmadaAt: Long?
+    )
+
     @Query("SELECT IFNULL(SUM(hidratosTotales), 0) FROM registro_comida WHERE fecha BETWEEN :start AND :end")
     suspend fun sumHidratosInRange(start: Long, end: Long): Float
 
@@ -129,6 +168,9 @@ interface RegistroComidaDao {
 
     @Query("SELECT IFNULL(SUM(unidadesInsulina), 0) FROM registro_comida WHERE fecha BETWEEN :start AND :end")
     suspend fun sumInsulinaInRange(start: Long, end: Long): Float
+
+    @Query("SELECT COUNT(*) FROM registro_comida WHERE origenRegistro = :origen")
+    fun observeCountByOrigen(origen: String): Flow<Int>
     
     // Métodos para el historial filtrado
     @Transaction

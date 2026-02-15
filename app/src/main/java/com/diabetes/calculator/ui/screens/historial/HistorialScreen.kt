@@ -6,6 +6,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,15 +30,23 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.work.WorkManager
 import com.diabetes.calculator.data.dao.RegistroComidaConItems
 import com.diabetes.calculator.data.entity.EstadoDosis
+import com.diabetes.calculator.data.entity.OrigenRegistro
 import com.diabetes.calculator.domain.FactoresContextoInsulina
 import com.diabetes.calculator.domain.FaseCicloHormonal
 import com.diabetes.calculator.domain.FranjaHoraria
@@ -44,6 +54,7 @@ import com.diabetes.calculator.domain.NivelEjercicio
 import com.diabetes.calculator.domain.NivelEnfermedad
 import com.diabetes.calculator.domain.NivelEstres
 import com.diabetes.calculator.util.DateUtils
+import com.diabetes.calculator.work.NightscoutSyncWorker
 import java.util.Locale
 
 private val HistorialHidratosColor = Color(0xFF4CAF50)
@@ -87,6 +98,7 @@ private fun HistorialMedicalNotice(modifier: Modifier = Modifier) {
 fun HistorialScreen(
     viewModel: HistorialViewModel
 ) {
+    val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val dayFilter by viewModel.dayFilter.collectAsState()
@@ -98,6 +110,9 @@ fun HistorialScreen(
     var detailRegistro by remember { mutableStateOf<RegistroComidaConItems?>(null) }
     var plantillaRegistro by remember { mutableStateOf<RegistroComidaConItems?>(null) }
     var plantillaNombre by remember { mutableStateOf("") }
+    var glucosaAjustadaAntes by remember { mutableStateOf<Int?>(null) }
+    var glucosaAjustadaDespues by remember { mutableStateOf<Int?>(null) }
+    var cargandoGlucosaAjustada by remember { mutableStateOf(false) }
 
     val onUpdateDoseStatus: (RegistroComidaConItems, EstadoDosis) -> Unit = { registro, nuevoEstado ->
         val anterior = EstadoDosis.fromValue(registro.registro.dosisEstado)
@@ -134,6 +149,77 @@ fun HistorialScreen(
                 registro = previousDetail.registro.copy(dosisConCorreccion = conCorreccion)
             )
         }
+    }
+
+    val onUpdateDoseForLink: (RegistroComidaConItems, Float, Long?) -> Unit =
+        { registro, unidades, confirmadaAt ->
+            viewModel.updateDoseForLink(registro.registro.id, unidades, confirmadaAt)
+            NightscoutSyncWorker.enqueueNow(
+                workManager = WorkManager.getInstance(context),
+                forceManual = true
+            )
+            val prev = detailRegistro
+            if (prev?.registro?.id == registro.registro.id) {
+                detailRegistro = prev.copy(
+                    registro = prev.registro.copy(
+                        unidadesInsulina = unidades,
+                        dosisConfirmadaAt = confirmadaAt
+                    )
+                )
+            }
+        }
+
+    LaunchedEffect(
+        detailRegistro?.registro?.id,
+        detailRegistro?.registro?.dosisConfirmadaAt,
+        detailRegistro?.registro?.origenRegistro
+    ) {
+        val current = detailRegistro
+        if (current == null) {
+            glucosaAjustadaAntes = null
+            glucosaAjustadaDespues = null
+            cargandoGlucosaAjustada = false
+            return@LaunchedEffect
+        }
+        val isNightscoutImport =
+            OrigenRegistro.fromValue(current.registro.origenRegistro) == OrigenRegistro.NIGHTSCOUT_IMPORT
+        if (isNightscoutImport) {
+            if (current.registro.glucosaAntesMgdl != null && current.registro.glucosaDespues2hMgdl != null) {
+                glucosaAjustadaAntes = null
+                glucosaAjustadaDespues = null
+                cargandoGlucosaAjustada = false
+                return@LaunchedEffect
+            }
+            cargandoGlucosaAjustada = true
+            val (antes, despues) = viewModel.hydrateNightscoutImportGlucose(current)
+            val latest = detailRegistro
+            if (latest?.registro?.id == current.registro.id) {
+                detailRegistro = latest.copy(
+                    registro = latest.registro.copy(
+                        glucosaAntesMgdl = antes ?: latest.registro.glucosaAntesMgdl,
+                        glucosaDespues2hMgdl = despues ?: latest.registro.glucosaDespues2hMgdl
+                    )
+                )
+            }
+            glucosaAjustadaAntes = null
+            glucosaAjustadaDespues = null
+            cargandoGlucosaAjustada = false
+            return@LaunchedEffect
+        }
+
+        val confirmadaAt = current.registro.dosisConfirmadaAt
+        if (confirmadaAt == null) {
+            glucosaAjustadaAntes = null
+            glucosaAjustadaDespues = null
+            cargandoGlucosaAjustada = false
+            return@LaunchedEffect
+        }
+
+        cargandoGlucosaAjustada = true
+        val (antes, despues) = viewModel.getAdjustedGlucoseForTimes(confirmadaAt)
+        glucosaAjustadaAntes = antes
+        glucosaAjustadaDespues = despues
+        cargandoGlucosaAjustada = false
     }
 
     Box(
@@ -319,26 +405,33 @@ fun HistorialScreen(
     }
 
     if (detailRegistro != null) {
-        RegistroDetalleBottomSheet(
-            registro = detailRegistro!!,
-            factorCorreccionFallbackMgdlPorU = factorCorreccionFallback,
-            onDismiss = { detailRegistro = null },
-            onRequestDelete = {
-                pendingDelete = detailRegistro
-            },
-            onRequestCreateTemplate = {
-                val current = detailRegistro ?: return@RegistroDetalleBottomSheet
-                plantillaRegistro = current
-                plantillaNombre = "Plantilla ${DateUtils.formatDateTime(current.registro.fecha)}"
-            },
-            onUpdateDoseStatus = { nuevoEstado ->
-                val current = detailRegistro ?: return@RegistroDetalleBottomSheet
-                onUpdateDoseStatus(current, nuevoEstado)
-            },
+            RegistroDetalleBottomSheet(
+                registro = detailRegistro!!,
+                factorCorreccionFallbackMgdlPorU = factorCorreccionFallback,
+                onDismiss = { detailRegistro = null },
+                onRequestDelete = {
+                    pendingDelete = detailRegistro
+                },
+                onRequestCreateTemplate = {
+                    val current = detailRegistro ?: return@RegistroDetalleBottomSheet
+                    plantillaRegistro = current
+                    plantillaNombre = "Plantilla ${DateUtils.formatDateTime(current.registro.fecha)}"
+                },
+                onUpdateDoseStatus = { nuevoEstado ->
+                    val current = detailRegistro ?: return@RegistroDetalleBottomSheet
+                    onUpdateDoseStatus(current, nuevoEstado)
+                },
             onUpdateDoseCorrection = { conCorreccion ->
                 val current = detailRegistro ?: return@RegistroDetalleBottomSheet
                 onUpdateDoseCorrection(current, conCorreccion)
-            }
+            },
+            onUpdateDoseForLink = { unidades, confirmadaAt ->
+                val current = detailRegistro ?: return@RegistroDetalleBottomSheet
+                onUpdateDoseForLink(current, unidades, confirmadaAt)
+            },
+            glucosaAjustadaAntes = glucosaAjustadaAntes,
+            glucosaAjustadaDespues = glucosaAjustadaDespues,
+            cargandoGlucosaAjustada = cargandoGlucosaAjustada
         )
     }
 
@@ -525,129 +618,269 @@ private fun RegistroCard(
     onOpenDetail: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val origenRegistro = OrigenRegistro.fromValue(registro.registro.origenRegistro)
+    val isNightscoutImport = origenRegistro == OrigenRegistro.NIGHTSCOUT_IMPORT
+    val isNightscoutLinked = !registro.registro.nightscoutTreatmentId.isNullOrBlank()
     val estadoDosis = EstadoDosis.fromValue(registro.registro.dosisEstado)
-    val insulinBreakdown = calculateInsulinBreakdown(registro)
+    val cardModifier = Modifier
+        .fillMaxWidth()
+        .clickable(onClick = onOpenDetail)
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onOpenDetail),
+        modifier = cardModifier,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow
         ),
         shape = RoundedCornerShape(16.dp)
     ) {
-        Column(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Schedule,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.secondary,
-                        modifier = Modifier.height(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = DateUtils.getRelativeDate(registro.registro.fecha),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    DoseStatusBadge(estado = estadoDosis)
-                }
-                IconButton(onClick = onDelete) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Eliminar",
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.height(18.dp)
-                    )
-                }
-            }
+            val isCompactWidth = maxWidth <= 360.dp
 
-            if (registro.items.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    registro.items.forEach { item ->
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (isNightscoutImport) {
+                    if (isCompactWidth) {
                         Row(
+                            modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                Icons.Default.Restaurant,
+                                imageVector = Icons.Default.Schedule,
                                 contentDescription = null,
-                                modifier = Modifier.height(12.dp),
-                                tint = MaterialTheme.colorScheme.outline
+                                tint = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.height(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "${item.alimento.nombre}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface
+                                text = DateUtils.formatDateTime(registro.registro.fecha),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Surface(
+                                color = HistorialInsulinaColor.copy(alpha = 0.14f),
+                                shape = RoundedCornerShape(999.dp)
+                            ) {
+                                Text(
+                                    text = "${String.format("%.1f", registro.registro.unidadesInsulina)} U",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = HistorialInsulinaColor,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            IconButton(onClick = onDelete) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Eliminar",
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.height(18.dp)
+                                )
+                            }
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Schedule,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.height(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = DateUtils.formatDateTime(registro.registro.fecha),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Surface(
+                                color = HistorialInsulinaColor.copy(alpha = 0.14f),
+                                shape = RoundedCornerShape(999.dp)
+                            ) {
+                                Text(
+                                    text = "${String.format("%.1f", registro.registro.unidadesInsulina)} U",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = HistorialInsulinaColor,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                            }
+                            IconButton(onClick = onDelete) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Eliminar",
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.height(18.dp)
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    val insulinBreakdown = calculateInsulinBreakdown(registro)
+                    if (isCompactWidth) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Schedule,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.height(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "(${item.item.gramosConsumidos.toInt()}g)",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = DateUtils.getRelativeDate(registro.registro.fecha),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
                             )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            DoseStatusBadge(estado = estadoDosis)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            IconButton(onClick = onDelete) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Eliminar",
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.height(18.dp)
+                                )
+                            }
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Schedule,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.height(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = DateUtils.getRelativeDate(registro.registro.fecha),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                DoseStatusBadge(estado = estadoDosis)
+                            }
+                            IconButton(onClick = onDelete) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Eliminar",
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.height(18.dp)
+                                )
+                            }
+                        }
+                    }
+
+                if (registro.items.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        registro.items.forEach { item ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.Restaurant,
+                                    contentDescription = null,
+                                    modifier = Modifier.height(12.dp),
+                                    tint = MaterialTheme.colorScheme.outline
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "${item.alimento.nombre}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "(${item.item.gramosConsumidos.toInt()}g)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
-            }
 
+                if (!registro.registro.notas.isNullOrBlank()) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = registro.registro.notas!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                }
 
-            if (!registro.registro.notas.isNullOrBlank()) {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.fillMaxWidth()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = registro.registro.notas!!,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(8.dp)
+                    DataChip(
+                        modifier = Modifier.weight(1f),
+                        label = "HIDRATOS",
+                        value = "${String.format("%.1f", registro.registro.hidratosTotales)}g",
+                        color = HistorialHidratosColor,
+                        isMain = true
+                    )
+                    DataChip(
+                        modifier = Modifier.weight(1f),
+                        label = "RACIONES",
+                        value = String.format("%.1f", registro.registro.racionesCalculadas),
+                        color = HistorialRacionesColor,
+                        isMain = true
+                    )
+                    DataChip(
+                        modifier = Modifier.weight(1.2f),
+                        label = "INSULINA",
+                        value = "${String.format("%.1f", insulinBreakdown.total)} U",
+                        color = HistorialInsulinaColor,
+                        valueIcon = if (isNightscoutLinked) Icons.Default.Link else null,
+                        valueIconTint = HistorialInsulinaColor,
+                        isMain = true
                     )
                 }
             }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                DataChip(
-                    modifier = Modifier.weight(1f),
-                    label = "HIDRATOS",
-                    value = "${String.format("%.1f", registro.registro.hidratosTotales)}g",
-                    color = HistorialHidratosColor,
-                    isMain = true
-                )
-                DataChip(
-                    modifier = Modifier.weight(1f),
-                    label = "RACIONES",
-                    value = String.format("%.1f", registro.registro.racionesCalculadas),
-                    color = HistorialRacionesColor,
-                    isMain = true
-                )
-                DataChip(
-                    modifier = Modifier.weight(1.2f),
-                    label = "INSULINA",
-                    value = "${String.format("%.1f", insulinBreakdown.total)} U",
-                    color = HistorialInsulinaColor,
-                    isMain = true
-                )
-            }
+        }
         }
     }
 }
@@ -661,7 +894,11 @@ private fun RegistroDetalleBottomSheet(
     onRequestDelete: () -> Unit,
     onRequestCreateTemplate: () -> Unit,
     onUpdateDoseStatus: (EstadoDosis) -> Unit,
-    onUpdateDoseCorrection: (Boolean?) -> Unit
+    onUpdateDoseCorrection: (Boolean?) -> Unit,
+    onUpdateDoseForLink: (Float, Long?) -> Unit,
+    glucosaAjustadaAntes: Int? = null,
+    glucosaAjustadaDespues: Int? = null,
+    cargandoGlucosaAjustada: Boolean = false
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -676,6 +913,15 @@ private fun RegistroDetalleBottomSheet(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             val estadoDosis = EstadoDosis.fromValue(registro.registro.dosisEstado)
+            val isNightscoutImport =
+                OrigenRegistro.fromValue(registro.registro.origenRegistro) == OrigenRegistro.NIGHTSCOUT_IMPORT
+            val isNightscoutLinked = !registro.registro.nightscoutTreatmentId.isNullOrBlank()
+            var enlaceHora by remember {
+                mutableStateOf(DateUtils.formatTime(registro.registro.dosisConfirmadaAt ?: registro.registro.fecha))
+            }
+            var enlaceDosis by remember {
+                mutableStateOf(String.format(Locale.getDefault(), "%.1f", registro.registro.unidadesInsulina))
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -696,7 +942,10 @@ private fun RegistroDetalleBottomSheet(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        if (estadoDosis == EstadoDosis.APLICADA && registro.registro.dosisConfirmadaAt != null) {
+                        if (!isNightscoutImport &&
+                            estadoDosis == EstadoDosis.APLICADA &&
+                            registro.registro.dosisConfirmadaAt != null
+                        ) {
                             Text(
                                 text = " • ",
                                 style = MaterialTheme.typography.bodySmall,
@@ -710,6 +959,9 @@ private fun RegistroDetalleBottomSheet(
                         }
                     }
                 }
+                if (isNightscoutLinked) {
+                    NightscoutLinkedBadge()
+                }
 //                IconButton(onClick = onDismiss) {
 //                    Icon(
 //                        imageVector = Icons.Default.Close,
@@ -720,11 +972,66 @@ private fun RegistroDetalleBottomSheet(
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
+            if (isNightscoutImport) {
+                DataChip(
+                    modifier = Modifier.fillMaxWidth(),
+                    label = "DOSIS",
+                    value = "${String.format("%.1f", registro.registro.unidadesInsulina)} U",
+                    color = HistorialInsulinaColor,
+                    isMain = true
+                )
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Text(
+                    text = "Glucosa",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                if (cargandoGlucosaAjustada) {
+                    Text(
+                        text = "Buscando glucosa retroactiva...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                StatDetailRow(
+                    label = "Antes",
+                    value = registro.registro.glucosaAntesMgdl?.let { "$it mg/dL" } ?: "—"
+                )
+                StatDetailRow(
+                    label = "2h después",
+                    value = registro.registro.glucosaDespues2hMgdl?.let { "$it mg/dL" } ?: "Pendiente"
+                )
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Text(
+                    text = "Notas",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = registro.registro.notas?.takeIf { it.isNotBlank() } ?: "Sin notas",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onRequestDelete) {
+                        Text("Eliminar registro", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+                return@Column
+            }
+
             val ratioText = buildRatioText(
                 registro = registro,
                 fallbackFactorCorreccionMgdlPorU = factorCorreccionFallbackMgdlPorU
             )
-            if (!ratioText.isNullOrBlank()) {
+            if (!isNightscoutImport && !ratioText.isNullOrBlank()) {
                 Text(
                     text = ratioText,
                     style = MaterialTheme.typography.labelMedium,
@@ -732,32 +1039,50 @@ private fun RegistroDetalleBottomSheet(
                 )
             }
 
+            if (!registro.registro.nightscoutTreatmentId.isNullOrBlank()) {
+                Text(
+                    text = "Vinculado Nightscout",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
+
             val insulinBreakdown = calculateInsulinBreakdown(registro)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+            if (isNightscoutImport) {
                 DataChip(
-                    modifier = Modifier.weight(1f),
-                    label = "HIDRATOS",
-                    value = "${String.format("%.1f", registro.registro.hidratosTotales)}g",
-                    color = HistorialHidratosColor,
-                    isMain = true
-                )
-                DataChip(
-                    modifier = Modifier.weight(1f),
-                    label = "RACIONES",
-                    value = String.format("%.1f", registro.registro.racionesCalculadas),
-                    color = HistorialRacionesColor,
-                    isMain = true
-                )
-                DataChip(
-                    modifier = Modifier.weight(1.2f),
-                    label = "INSULINA",
+                    modifier = Modifier.fillMaxWidth(),
+                    label = "DOSIS",
                     value = "${String.format("%.1f", insulinBreakdown.total)} U",
                     color = HistorialInsulinaColor,
                     isMain = true
                 )
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    DataChip(
+                        modifier = Modifier.weight(1f),
+                        label = "HIDRATOS",
+                        value = "${String.format("%.1f", registro.registro.hidratosTotales)}g",
+                        color = HistorialHidratosColor,
+                        isMain = true
+                    )
+                    DataChip(
+                        modifier = Modifier.weight(1f),
+                        label = "RACIONES",
+                        value = String.format("%.1f", registro.registro.racionesCalculadas),
+                        color = HistorialRacionesColor,
+                        isMain = true
+                    )
+                    DataChip(
+                        modifier = Modifier.weight(1.2f),
+                        label = "INSULINA",
+                        value = "${String.format("%.1f", insulinBreakdown.total)} U",
+                        color = HistorialInsulinaColor,
+                        isMain = true
+                    )
+                }
             }
 
             val contextoBadges = buildContextoBadges(
@@ -808,14 +1133,32 @@ private fun RegistroDetalleBottomSheet(
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold
             )
-            StatDetailRow(
-                label = "Alimentos",
-                value = formatUnits(insulinBreakdown.comida)
-            )
-            StatDetailRow(
-                label = "Corrección",
-                value = formatSignedUnits(insulinBreakdown.correccion)
-            )
+            if (isNightscoutImport) {
+                StatDetailRow(
+                    label = "Dosis",
+                    value = formatUnits(insulinBreakdown.total)
+                )
+            } else {
+                StatDetailRow(
+                    label = "Alimentos",
+                    value = formatUnits(insulinBreakdown.comida)
+                )
+                StatDetailRow(
+                    label = "Corrección",
+                    value = formatSignedUnits(insulinBreakdown.correccion)
+                )
+            }
+            val dosisRemota = registro.registro.unidadesInsulinaRemota
+            if (dosisRemota != null && kotlin.math.abs(dosisRemota - registro.registro.unidadesInsulina) >= 0.05f) {
+                StatDetailRow(
+                    label = "Dosis app",
+                    value = formatUnits(registro.registro.unidadesInsulina)
+                )
+                StatDetailRow(
+                    label = "Dosis Nightscout",
+                    value = formatUnits(dosisRemota)
+                )
+            }
             registro.registro.factorContextoTotalAplicado?.let { factorAplicado ->
                 StatDetailRow(
                     label = "Factor contextual",
@@ -834,7 +1177,7 @@ private fun RegistroDetalleBottomSheet(
                     value = capText
                 )
             }
-            if (estadoDosis == EstadoDosis.APLICADA) {
+            if (!isNightscoutImport && estadoDosis == EstadoDosis.APLICADA) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -852,13 +1195,14 @@ private fun RegistroDetalleBottomSheet(
                 }
             }
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            if (!isNightscoutImport) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-            Text(
-                text = "Alimentos",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
+                Text(
+                    text = "Alimentos",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
                 registro.items.forEach { item ->
                     val itemMetrics = calculateItemMetrics(
                         registro = registro,
@@ -869,18 +1213,18 @@ private fun RegistroDetalleBottomSheet(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = item.alimento.nombre,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Text(
-                            text = "${item.item.gramosConsumidos.toInt()} g",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = item.alimento.nombre,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = "${item.item.gramosConsumidos.toInt()} g",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Text(
                             text = buildItemMetricsText(
                                 hidratos = item.item.hidratosCalculados,
@@ -892,23 +1236,47 @@ private fun RegistroDetalleBottomSheet(
                         )
                     }
                 }
+            }
 
             val glucosaAntes = registro.registro.glucosaAntesMgdl
             val glucosaDespues = registro.registro.glucosaDespues2hMgdl
-            if (glucosaAntes != null || glucosaDespues != null) {
+            if (glucosaAntes != null || glucosaDespues != null || glucosaAjustadaAntes != null || glucosaAjustadaDespues != null) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Text(
                     text = "Glucosa",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
+                if (cargandoGlucosaAjustada) {
+                    Text(
+                        text = "Actualizando valores por hora ajustada...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                val antesBase = glucosaAntes?.let { "$it mg/dL" } ?: "—"
+                val antesValor = glucosaAjustadaAntes?.let { ajustada ->
+                    if (glucosaAntes == ajustada) {
+                        antesBase
+                    } else {
+                        "$antesBase ($ajustada mg/dL)"
+                    }
+                } ?: antesBase
                 StatDetailRow(
                     label = "Antes",
-                    value = glucosaAntes?.let { "$it mg/dL" } ?: "—"
+                    value = antesValor
                 )
+                val despuesBase = glucosaDespues?.let { "$it mg/dL" } ?: "Pendiente"
+                val despuesValor = glucosaAjustadaDespues?.let { ajustada ->
+                    if (glucosaDespues == ajustada) {
+                        despuesBase
+                    } else {
+                        "$despuesBase ($ajustada mg/dL)"
+                    }
+                } ?: despuesBase
                 StatDetailRow(
                     label = "2h después",
-                    value = glucosaDespues?.let { "$it mg/dL" } ?: "Pendiente"
+                    value = despuesValor
                 )
             }
 
@@ -926,6 +1294,70 @@ private fun RegistroDetalleBottomSheet(
                 )
             }
 
+            if (!isNightscoutImport) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Text(
+                    text = "Ajuste para enlace Nightscout",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                OutlinedTextField(
+                    value = enlaceHora,
+                    onValueChange = { enlaceHora = it },
+                    label = { Text("Hora confirmada (HH:mm)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = enlaceDosis,
+                    onValueChange = { enlaceDosis = it },
+                    label = { Text("Dosis para enlace (U)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                val enlaceError = remember(enlaceHora, enlaceDosis) {
+                    val parts = enlaceHora.split(":")
+                    if (parts.size != 2) return@remember "Formato hora HH:mm"
+                    val h = parts[0].toIntOrNull()
+                    val m = parts[1].toIntOrNull()
+                    if (h == null || m == null || h !in 0..23 || m !in 0..59) "Hora inválida" else null
+                }
+                val enlaceDosisValue = enlaceDosis.replace(',', '.').toFloatOrNull()
+                Button(
+                    onClick = {
+                        val parts = enlaceHora.split(":")
+                        val h = parts[0].toInt()
+                        val m = parts[1].toInt()
+                        val calendar = java.util.Calendar.getInstance().apply {
+                            timeInMillis = registro.registro.fecha
+                            set(java.util.Calendar.HOUR_OF_DAY, h)
+                            set(java.util.Calendar.MINUTE, m)
+                            set(java.util.Calendar.SECOND, 0)
+                            set(java.util.Calendar.MILLISECOND, 0)
+                        }
+                        val confirmAt = calendar.timeInMillis
+                        val units = enlaceDosisValue ?: registro.registro.unidadesInsulina
+                        onUpdateDoseForLink(units, confirmAt)
+                    },
+                    enabled = enlaceError == null && enlaceDosisValue != null,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Guardar ajuste de enlace")
+                }
+                if (enlaceError != null || enlaceDosisValue == null) {
+                    Text(
+                        text = enlaceError ?: "Dosis inválida",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -937,6 +1369,34 @@ private fun RegistroDetalleBottomSheet(
                     Text("Eliminar registro", color = MaterialTheme.colorScheme.error)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun NightscoutLinkedBadge() {
+    val color = MaterialTheme.colorScheme.secondary
+    Surface(
+        color = color.copy(alpha = 0.14f),
+        shape = RoundedCornerShape(999.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Link,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(12.dp)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = "NS",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = color
+            )
         }
     }
 }
@@ -1152,8 +1612,14 @@ private fun DataChip(
     label: String,
     value: String,
     color: androidx.compose.ui.graphics.Color,
+    valueIcon: ImageVector? = null,
+    valueIconTint: Color? = null,
     isMain: Boolean = false
 ) {
+    val density = LocalDensity.current
+    var valueTextWidthPx by remember(value) { mutableStateOf(0) }
+    val valueIconSize = 14.dp
+
     Card(
         modifier = modifier,
         colors = CardDefaults.cardColors(
@@ -1172,14 +1638,38 @@ private fun DataChip(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
             )
-            Text(
-                text = value,
-                style = if (isMain) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Bold,
-                color = if (isMain) color else MaterialTheme.colorScheme.onSurface,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
+            BoxWithConstraints(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                val textWidthDp = with(density) { valueTextWidthPx.toDp() }
+                val textStartDp = ((maxWidth - textWidthDp) / 2f).coerceAtLeast(0.dp)
+                val iconOffsetFromStart =
+                    ((textStartDp / 2f) - (valueIconSize / 2f)).coerceAtLeast(0.dp)
+
+                Text(
+                    text = value,
+                    style = if (isMain) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isMain) color else MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                    onTextLayout = { layoutResult ->
+                        valueTextWidthPx = layoutResult.size.width
+                    }
+                )
+                if (valueIcon != null) {
+                    Icon(
+                        imageVector = valueIcon,
+                        contentDescription = null,
+                        tint = valueIconTint ?: if (isMain) color else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .offset(x = iconOffsetFromStart)
+                            .size(valueIconSize)
+                    )
+                }
+            }
         }
     }
 }

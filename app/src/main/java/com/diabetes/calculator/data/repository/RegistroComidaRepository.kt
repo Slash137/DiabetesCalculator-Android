@@ -4,6 +4,7 @@ import com.diabetes.calculator.data.dao.RegistroComidaConItems
 import com.diabetes.calculator.data.dao.RegistroComidaDao
 import com.diabetes.calculator.data.entity.AlimentoEnRegistro
 import com.diabetes.calculator.data.entity.EstadoDosis
+import com.diabetes.calculator.data.entity.OrigenRegistro
 import com.diabetes.calculator.data.entity.RegistroComida
 import kotlinx.coroutines.flow.Flow
 
@@ -17,6 +18,7 @@ class RegistroComidaRepository(private val dao: RegistroComidaDao) {
      * Obtiene todos los registros con sus items.
      */
     val allRegistros: Flow<List<RegistroComidaConItems>> = dao.getAllWithItems()
+    val nightscoutImportCount: Flow<Int> = dao.observeCountByOrigen(OrigenRegistro.NIGHTSCOUT_IMPORT.value)
 
     /**
      * Busca registros por texto (nombre de alimento o notas).
@@ -28,6 +30,10 @@ class RegistroComidaRepository(private val dao: RegistroComidaDao) {
      */
     suspend fun insertRegistroCompleto(registro: RegistroComida, items: List<AlimentoEnRegistro>): Int {
         return dao.insertRegistroCompleto(registro, items)
+    }
+
+    suspend fun insertRegistro(registro: RegistroComida): Int {
+        return dao.insertRegistro(registro).toInt()
     }
 
     /**
@@ -71,6 +77,36 @@ class RegistroComidaRepository(private val dao: RegistroComidaDao) {
 
     suspend fun sumInsulinaInRange(start: Long, end: Long): Float =
         dao.sumInsulinaInRange(start, end)
+
+    suspend fun getRegistroRawById(id: Int): RegistroComida? = dao.getRegistroRawById(id)
+
+    suspend fun getByNightscoutTreatmentId(treatmentId: String): RegistroComida? =
+        dao.getByNightscoutTreatmentId(treatmentId)
+
+    suspend fun getRegistrosInRangeRaw(from: Long, to: Long): List<RegistroComida> =
+        dao.getRegistrosInRangeRaw(from, to)
+
+    suspend fun updateNightscoutLink(
+        registroId: Int,
+        treatmentId: String?,
+        unidadesInsulinaRemota: Float?,
+        reconciliadoAt: Long?,
+        dcid: String?
+    ) {
+        dao.updateNightscoutLink(
+            registroId = registroId,
+            treatmentId = treatmentId,
+            unidadesInsulinaRemota = unidadesInsulinaRemota,
+            reconciliadoAt = reconciliadoAt,
+            dcid = dcid
+        )
+    }
+
+    suspend fun updateDoseForLink(
+        registroId: Int,
+        unidades: Float,
+        confirmadaAt: Long?
+    ) = dao.updateDoseForLink(registroId, unidades, confirmadaAt)
 
     /**
      * Elimina un registro.

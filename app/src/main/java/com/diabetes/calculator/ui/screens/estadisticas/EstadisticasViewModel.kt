@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.diabetes.calculator.data.dao.RegistroComidaConItems
 import com.diabetes.calculator.data.entity.EstadoDosis
+import com.diabetes.calculator.data.entity.OrigenRegistro
 import com.diabetes.calculator.data.repository.NightscoutRepository
 import com.diabetes.calculator.data.repository.RegistroComidaRepository
 import com.diabetes.calculator.data.repository.UsuarioProfileRepository
@@ -45,6 +46,8 @@ data class EstadisticasResumen(
     val hidratosTotales: Float,
     val racionesTotales: Float,
     val insulinaTotal: Float,
+    val insulinaExternaTotal: Float,
+    val pinchazosExternos: Int,
     val hidratosPorComida: Float,
     val racionesPorComida: Float,
     val insulinaPorComida: Float,
@@ -236,7 +239,14 @@ class EstadisticasViewModel(
         nightscoutStats: NightscoutAdvancedStat?,
         nightscoutError: String?
     ): EstadisticasResumen {
-        val totalRegistros = registros.size
+        val mealRegistros = registros.filter {
+            OrigenRegistro.fromValue(it.registro.origenRegistro) != OrigenRegistro.NIGHTSCOUT_IMPORT
+        }
+        val externalRegistros = registros.filter {
+            OrigenRegistro.fromValue(it.registro.origenRegistro) == OrigenRegistro.NIGHTSCOUT_IMPORT
+        }
+
+        val totalRegistros = mealRegistros.size
         val dayStarts = registros
             .map { DateUtils.getStartOfDay(it.registro.fecha) }
             .toSet()
@@ -246,17 +256,20 @@ class EstadisticasViewModel(
         val diasSinRegistros = (totalDiasPeriodo - diasConRegistros).coerceAtLeast(0)
         val comidasPorDia = safeDiv(totalRegistros.toFloat(), totalDiasPeriodo.toFloat())
 
-        val hidratosTotales = registros.sumOf { it.registro.hidratosTotales.toDouble() }.toFloat()
-        val racionesTotales = registros.sumOf { it.registro.racionesCalculadas.toDouble() }.toFloat()
+        val hidratosTotales = mealRegistros.sumOf { it.registro.hidratosTotales.toDouble() }.toFloat()
+        val racionesTotales = mealRegistros.sumOf { it.registro.racionesCalculadas.toDouble() }.toFloat()
         val insulinaTotal = registros.sumOf { it.registro.unidadesInsulina.toDouble() }.toFloat()
+        val insulinaExternaTotal = externalRegistros.sumOf { it.registro.unidadesInsulina.toDouble() }.toFloat()
+        val pinchazosExternos = externalRegistros.size
 
         val hidratosPorComida = safeDiv(hidratosTotales, totalRegistros.toFloat())
         val racionesPorComida = safeDiv(racionesTotales, totalRegistros.toFloat())
-        val insulinaPorComida = safeDiv(insulinaTotal, totalRegistros.toFloat())
+        val insulinaComidasTotal = mealRegistros.sumOf { it.registro.unidadesInsulina.toDouble() }.toFloat()
+        val insulinaPorComida = safeDiv(insulinaComidasTotal, totalRegistros.toFloat())
 
-        val ratioEfectivoURacion = if (racionesTotales > 0f) insulinaTotal / racionesTotales else null
-        val ratioEfectivoUG = if (hidratosTotales > 0f) insulinaTotal / hidratosTotales else null
-        val gramosPorUnidad = ratioEfectivoUG?.takeIf { it > 0f }?.let { 1f / it }
+        val ratioEfectivoURacion = if (racionesTotales > 0f) insulinaComidasTotal / racionesTotales else null
+        val ratioEfectivoUGComidas = if (hidratosTotales > 0f) insulinaComidasTotal / hidratosTotales else null
+        val gramosPorUnidad = ratioEfectivoUGComidas?.takeIf { it > 0f }?.let { 1f / it }
 
         val desviacionRatioPct =
             if (ratioConfiguradoURacion != null && ratioConfiguradoURacion > 0f && ratioEfectivoURacion != null) {
@@ -265,9 +278,9 @@ class EstadisticasViewModel(
                 null
             }
 
-        val glucosaAntesValues = registros.mapNotNull { it.registro.glucosaAntesMgdl?.toFloat() }
-        val glucosaDespuesValues = registros.mapNotNull { it.registro.glucosaDespues2hMgdl?.toFloat() }
-        val deltas2h = registros.mapNotNull { registro ->
+        val glucosaAntesValues = mealRegistros.mapNotNull { it.registro.glucosaAntesMgdl?.toFloat() }
+        val glucosaDespuesValues = mealRegistros.mapNotNull { it.registro.glucosaDespues2hMgdl?.toFloat() }
+        val deltas2h = mealRegistros.mapNotNull { registro ->
             val antes = registro.registro.glucosaAntesMgdl
             val despues = registro.registro.glucosaDespues2hMgdl
             if (antes != null && despues != null) (despues - antes).toFloat() else null
@@ -284,11 +297,11 @@ class EstadisticasViewModel(
             null
         }
 
-        val registrosConGlucosa = registros.count {
+        val registrosConGlucosa = mealRegistros.count {
             it.registro.glucosaAntesMgdl != null || it.registro.glucosaDespues2hMgdl != null
         }
-        val registrosConNotas = registros.count { !it.registro.notas.isNullOrBlank() }
-        val dosisAplicadasRegs = registros.filter {
+        val registrosConNotas = mealRegistros.count { !it.registro.notas.isNullOrBlank() }
+        val dosisAplicadasRegs = mealRegistros.filter {
             EstadoDosis.fromValue(it.registro.dosisEstado) == EstadoDosis.APLICADA
         }
         val dosisAplicadas = dosisAplicadasRegs.size
@@ -311,12 +324,12 @@ class EstadisticasViewModel(
                 .map { it.registro.unidadesInsulina }
         )
 
-        val franjaDistribution = buildFranjaDistribution(registros)
-        val weekdayStats = buildWeekdayStats(registros)
-        val topAlimentos = buildTopAlimentos(registros)
-        val alimentosConMayorDelta = buildAlimentosConMayorDelta(registros)
-        val similarMeals = buildSimilarMeals(registros)
-        val trend = buildTrends(registros)
+        val franjaDistribution = buildFranjaDistribution(mealRegistros)
+        val weekdayStats = buildWeekdayStats(mealRegistros)
+        val topAlimentos = buildTopAlimentos(mealRegistros)
+        val alimentosConMayorDelta = buildAlimentosConMayorDelta(mealRegistros)
+        val similarMeals = buildSimilarMeals(mealRegistros)
+        val trend = buildTrends(mealRegistros)
 
         return EstadisticasResumen(
             totalRegistros = totalRegistros,
@@ -326,11 +339,13 @@ class EstadisticasViewModel(
             hidratosTotales = hidratosTotales,
             racionesTotales = racionesTotales,
             insulinaTotal = insulinaTotal,
+            insulinaExternaTotal = insulinaExternaTotal,
+            pinchazosExternos = pinchazosExternos,
             hidratosPorComida = hidratosPorComida,
             racionesPorComida = racionesPorComida,
             insulinaPorComida = insulinaPorComida,
             ratioEfectivoURacion = ratioEfectivoURacion,
-            ratioEfectivoUG = ratioEfectivoUG,
+            ratioEfectivoUG = ratioEfectivoUGComidas,
             gramosPorUnidad = gramosPorUnidad,
             ratioConfiguradoURacion = ratioConfiguradoURacion,
             desviacionRatioPct = desviacionRatioPct,

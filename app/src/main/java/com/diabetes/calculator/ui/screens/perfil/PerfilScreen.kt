@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -69,12 +70,14 @@ import androidx.core.content.ContextCompat
 import android.content.pm.PackageManager
 import com.diabetes.calculator.ui.components.AvisoMedico
 import com.diabetes.calculator.ui.screens.NightscoutStatus
+import com.diabetes.calculator.data.repository.NightscoutRegistrosSyncSummary
 import com.diabetes.calculator.util.BackupPasswordStore
 import com.diabetes.calculator.util.DateUtils
 import com.diabetes.calculator.util.NightscoutRetryPolicy
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -94,7 +97,11 @@ fun PerfilScreen(
     nightscoutStatus: NightscoutStatus = NightscoutStatus(),
     pendingGlucoseCount: Int = 0,
     pendingMaxAttempts: Int = 0,
-    onRefreshNightscout: () -> Unit = {}
+    onRefreshNightscout: () -> Unit = {},
+    nightscoutRegistroSyncSummary: NightscoutRegistrosSyncSummary = NightscoutRegistrosSyncSummary(),
+    nightscoutImportCount: Int = 0,
+    onSyncRegistrosNow: () -> Unit = {},
+    onResyncRegistros30d: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val nombre by viewModel.nombre.collectAsState()
@@ -109,6 +116,7 @@ fun PerfilScreen(
     val recordatorio2hActivo by viewModel.recordatorio2hActivo.collectAsState()
     val nightscoutUrl by viewModel.nightscoutUrl.collectAsState()
     val nightscoutToken by viewModel.nightscoutToken.collectAsState()
+    val nightscoutSyncRegistrosActivo by viewModel.nightscoutSyncRegistrosActivo.collectAsState()
     val factorHoraMadrugada by viewModel.factorHoraMadrugada.collectAsState()
     val factorHoraManana by viewModel.factorHoraManana.collectAsState()
     val factorHoraTarde by viewModel.factorHoraTarde.collectAsState()
@@ -539,10 +547,16 @@ fun PerfilScreen(
                     nightscoutToken = nightscoutToken,
                     onNightscoutUrlChange = viewModel::updateNightscoutUrl,
                     onNightscoutTokenChange = viewModel::updateNightscoutToken,
+                    nightscoutSyncRegistrosActivo = nightscoutSyncRegistrosActivo,
+                    onNightscoutSyncRegistrosActivoChange = viewModel::updateNightscoutSyncRegistrosActivo,
                     nightscoutStatus = nightscoutStatus,
                     pendingGlucoseCount = pendingGlucoseCount,
                     pendingMaxAttempts = pendingMaxAttempts,
-                    onRefreshNightscout = onRefreshNightscout
+                    onRefreshNightscout = onRefreshNightscout,
+                    nightscoutRegistroSyncSummary = nightscoutRegistroSyncSummary,
+                    nightscoutImportCount = nightscoutImportCount,
+                    onSyncRegistrosNow = onSyncRegistrosNow,
+                    onResyncRegistros30d = onResyncRegistros30d
                 )
             }
         }
@@ -629,13 +643,39 @@ private fun PerfilContent(
     nightscoutToken: String,
     onNightscoutUrlChange: (String) -> Unit,
     onNightscoutTokenChange: (String) -> Unit,
+    nightscoutSyncRegistrosActivo: Boolean,
+    onNightscoutSyncRegistrosActivoChange: (Boolean) -> Unit,
     nightscoutStatus: NightscoutStatus,
     pendingGlucoseCount: Int,
     pendingMaxAttempts: Int,
-    onRefreshNightscout: () -> Unit
+    onRefreshNightscout: () -> Unit,
+    nightscoutRegistroSyncSummary: NightscoutRegistrosSyncSummary,
+    nightscoutImportCount: Int,
+    onSyncRegistrosNow: () -> Unit,
+    onResyncRegistros30d: () -> Unit
 ) {
     var showContextFactorsDialog by remember { mutableStateOf(false) }
     var showDefaultsTable by remember { mutableStateOf(false) }
+    var isSyncingRegistros by remember { mutableStateOf(false) }
+    var syncBaseline by remember { mutableStateOf<NightscoutRegistrosSyncSummary?>(null) }
+
+    LaunchedEffect(nightscoutRegistroSyncSummary, isSyncingRegistros) {
+        val baseline = syncBaseline
+        if (isSyncingRegistros && baseline != null && baseline != nightscoutRegistroSyncSummary) {
+            isSyncingRegistros = false
+            syncBaseline = null
+        }
+    }
+
+    LaunchedEffect(isSyncingRegistros) {
+        if (isSyncingRegistros) {
+            delay(20_000)
+            if (isSyncingRegistros) {
+                isSyncingRegistros = false
+                syncBaseline = null
+            }
+        }
+    }
 
     Box(
         modifier = modifier.fillMaxSize(),
@@ -849,9 +889,29 @@ private fun PerfilContent(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "Hora: ${factorHoraMadrugada}/${factorHoraManana}/${factorHoraTarde}/${factorHoraNoche} · " +
-                            "Estrés: ${factorEstresLeve}/${factorEstresModerado}/${factorEstresAlto} · " +
-                            "Ejercicio: ${factorEjercicioSuave}/${factorEjercicioModerado}/${factorEjercicioIntenso}",
+                        text = "Hora: ${factorHoraMadrugada}/${factorHoraManana}/${factorHoraTarde}/${factorHoraNoche}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Estrés: ${factorEstresLeve}/${factorEstresModerado}/${factorEstresAlto}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Enfermedad: ${factorEnfermedadLeve}/${factorEnfermedadModerada}/${factorEnfermedadAlta}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (cicloHormonalActivo) {
+                        Text(
+                            text = "Ciclo: ${factorCicloMenstruacion}/${factorCicloFolicular}/${factorCicloOvulacion}/${factorCicloLutea}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = "Ejercicio: ${factorEjercicioSuave}/${factorEjercicioModerado}/${factorEjercicioIntenso}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1397,7 +1457,7 @@ private fun PerfilContent(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Corrección por defecto en nueva comida",
+                                text = "Dosis ajustada por defecto en nueva comida",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Medium
                             )
@@ -1534,6 +1594,126 @@ private fun PerfilContent(
                         enabled = !isSaving,
                         shape = RoundedCornerShape(12.dp)
                     )
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Sincronizar registros de insulina",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = "Sube registros y reconcilia pinchazos de Nightscout/Novopen.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = nightscoutSyncRegistrosActivo,
+                            onCheckedChange = onNightscoutSyncRegistrosActivoChange,
+                            enabled = !isSaving,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = MaterialTheme.colorScheme.primary,
+                                checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
+                            )
+                        )
+                    }
+
+                    if (nightscoutSyncRegistrosActivo) {
+                        val lastSyncRegistrosText = nightscoutRegistroSyncSummary.lastSuccessAt?.let {
+                            "Último sync registros: ${DateUtils.formatDateTime(it)}"
+                        } ?: "Último sync registros: —"
+                        val lastSyncErrorText = nightscoutRegistroSyncSummary.lastErrorAt?.let {
+                            "Último error registros: ${DateUtils.formatDateTime(it)}"
+                        } ?: "Último error registros: —"
+
+                        Text(
+                            text = lastSyncRegistrosText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = lastSyncErrorText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "Registros Nightscout importados: $nightscoutImportCount",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "Pendientes de subida (app -> Nightscout): ${nightscoutRegistroSyncSummary.pendingCount}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "Fallidos de subida (app -> Nightscout): ${nightscoutRegistroSyncSummary.failedCount}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (!nightscoutRegistroSyncSummary.lastErrorMessage.isNullOrBlank()) {
+                            Text(
+                                text = "Detalle error: ${nightscoutRegistroSyncSummary.lastErrorMessage}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        if (isSyncingRegistros) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Text(
+                                    text = "Sincronizando registros...",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    syncBaseline = nightscoutRegistroSyncSummary
+                                    isSyncingRegistros = true
+                                    onSyncRegistrosNow()
+                                },
+                                modifier = Modifier.weight(1f),
+                                enabled = !isSyncingRegistros,
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("Sincronizar")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    syncBaseline = nightscoutRegistroSyncSummary
+                                    isSyncingRegistros = true
+                                    onResyncRegistros30d()
+                                },
+                                modifier = Modifier.weight(1f),
+                                enabled = !isSyncingRegistros,
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("Resync 30 días")
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
                     val lastSuccessText = nightscoutStatus.lastSuccessAt?.let {
                         "Última actualización: ${DateUtils.formatDateTime(it)}"

@@ -5,7 +5,10 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.diabetes.calculator.data.dao.RegistroComidaConItems
 import com.diabetes.calculator.data.entity.EstadoDosis
+import com.diabetes.calculator.data.entity.OrigenRegistro
 import com.diabetes.calculator.data.entity.PlantillaItem
+import com.diabetes.calculator.data.repository.NightscoutRepository
+import com.diabetes.calculator.data.repository.NightscoutTreatmentTombstoneRepository
 import com.diabetes.calculator.data.repository.PlantillaRepository
 import com.diabetes.calculator.data.repository.RegistroComidaRepository
 import com.diabetes.calculator.data.repository.UsuarioProfileRepository
@@ -47,7 +50,9 @@ enum class DoseStatusFilter(
 class HistorialViewModel(
     private val repository: RegistroComidaRepository,
     private val plantillaRepository: PlantillaRepository,
-    private val usuarioRepository: UsuarioProfileRepository
+    private val usuarioRepository: UsuarioProfileRepository,
+    private val nightscoutTreatmentTombstoneRepository: NightscoutTreatmentTombstoneRepository,
+    private val nightscoutRepository: NightscoutRepository
 ) : ViewModel() {
     
     private val _uiState = MutableStateFlow<HistorialUiState>(HistorialUiState.Loading)
@@ -123,6 +128,11 @@ class HistorialViewModel(
     
     fun deleteRegistro(id: Int) {
         viewModelScope.launch {
+            val registro = repository.getRegistroRawById(id)
+            val treatmentId = registro?.nightscoutTreatmentId
+            if (!treatmentId.isNullOrBlank()) {
+                nightscoutTreatmentTombstoneRepository.add(treatmentId)
+            }
             repository.deleteById(id)
         }
     }
@@ -137,6 +147,82 @@ class HistorialViewModel(
         viewModelScope.launch {
             repository.updateDosisCorreccion(registroId, conCorreccion)
         }
+    }
+
+    fun updateDoseForLink(registroId: Int, unidades: Float, confirmadaAt: Long?) {
+        viewModelScope.launch {
+            repository.updateDoseForLink(registroId, unidades, confirmadaAt)
+        }
+    }
+
+    suspend fun getAdjustedGlucoseForTimes(confirmadaAt: Long): Pair<Int?, Int?> {
+        val profile = usuarioRepository.getProfileSync() ?: return null to null
+        val url = profile.nightscoutUrl?.trim().orEmpty()
+        if (url.isBlank()) return null to null
+
+        val token = profile.nightscoutToken
+        val antes = nightscoutRepository.getGlucoseClosestTo(
+            baseUrl = url,
+            token = token,
+            targetMillis = confirmadaAt,
+            toleranceMinutes = 20
+        )?.sgv
+        val despues = nightscoutRepository.getGlucoseClosestTo(
+            baseUrl = url,
+            token = token,
+            targetMillis = confirmadaAt + (2 * 60 * 60 * 1000L),
+            toleranceMinutes = 30
+        )?.sgv
+        return antes to despues
+    }
+
+    suspend fun hydrateNightscoutImportGlucose(
+        registro: RegistroComidaConItems
+    ): Pair<Int?, Int?> {
+        if (OrigenRegistro.fromValue(registro.registro.origenRegistro) != OrigenRegistro.NIGHTSCOUT_IMPORT) {
+            return registro.registro.glucosaAntesMgdl to registro.registro.glucosaDespues2hMgdl
+        }
+        if (registro.registro.glucosaAntesMgdl != null && registro.registro.glucosaDespues2hMgdl != null) {
+            return registro.registro.glucosaAntesMgdl to registro.registro.glucosaDespues2hMgdl
+        }
+
+        val profile = usuarioRepository.getProfileSync()
+            ?: return registro.registro.glucosaAntesMgdl to registro.registro.glucosaDespues2hMgdl
+        val url = profile.nightscoutUrl?.trim().orEmpty()
+        if (url.isBlank()) {
+            return registro.registro.glucosaAntesMgdl to registro.registro.glucosaDespues2hMgdl
+        }
+
+        val token = profile.nightscoutToken
+        val doseMillis = registro.registro.fecha
+        var before = registro.registro.glucosaAntesMgdl
+        var after = registro.registro.glucosaDespues2hMgdl
+
+        if (before == null) {
+            before = nightscoutRepository.getGlucoseClosestTo(
+                baseUrl = url,
+                token = token,
+                targetMillis = doseMillis,
+                toleranceMinutes = 20
+            )?.sgv
+            if (before != null) {
+                repository.updateGlucosaAntes(registro.registro.id, before)
+            }
+        }
+
+        if (after == null) {
+            after = nightscoutRepository.getGlucoseClosestTo(
+                baseUrl = url,
+                token = token,
+                targetMillis = doseMillis + (2 * 60 * 60 * 1000L),
+                toleranceMinutes = 30
+            )?.sgv
+            if (after != null) {
+                repository.updateGlucosaDespues2h(registro.registro.id, after)
+            }
+        }
+
+        return before to after
     }
 
     fun createPlantillaFromRegistro(
@@ -192,7 +278,9 @@ class HistorialViewModel(
     class Factory(
         private val repository: RegistroComidaRepository,
         private val plantillaRepository: PlantillaRepository,
-        private val usuarioRepository: UsuarioProfileRepository
+        private val usuarioRepository: UsuarioProfileRepository,
+        private val nightscoutTreatmentTombstoneRepository: NightscoutTreatmentTombstoneRepository,
+        private val nightscoutRepository: NightscoutRepository
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -200,7 +288,9 @@ class HistorialViewModel(
                 return HistorialViewModel(
                     repository,
                     plantillaRepository,
-                    usuarioRepository
+                    usuarioRepository,
+                    nightscoutTreatmentTombstoneRepository,
+                    nightscoutRepository
                 ) as T
             }
             throw IllegalArgumentException("Clase de ViewModel desconocida")

@@ -90,6 +90,11 @@ class BackupManager(
                     "hidratos_totales",
                     "raciones_totales",
                     "insulina_total",
+                    "origen_registro",
+                    "nightscout_treatment_id",
+                    "insulina_remota",
+                    "nightscout_reconciliado_at",
+                    "nightscout_sync_dcid",
                     "ratio_u_g",
                     "glucosa_antes",
                     "glucosa_despues_2h",
@@ -110,6 +115,7 @@ class BackupManager(
             registros.forEach { registro ->
                 val fecha = dateFormat.format(registro.fecha)
                 val dosisConfirmada = registro.dosisConfirmadaAt?.let { dateFormat.format(it) } ?: ""
+                val reconciliadoAt = registro.nightscoutReconciliadoAt?.let { dateFormat.format(it) } ?: ""
                 val ratio = registro.ratioInsulinaHc ?: if (registro.hidratosTotales > 0f) {
                     registro.unidadesInsulina / registro.hidratosTotales
                 } else {
@@ -128,6 +134,11 @@ class BackupManager(
                             formatFloat(registro.hidratosTotales),
                             formatFloat(registro.racionesCalculadas),
                             formatFloat(registro.unidadesInsulina),
+                            registro.origenRegistro,
+                            registro.nightscoutTreatmentId ?: "",
+                            formatFloat(registro.unidadesInsulinaRemota),
+                            reconciliadoAt,
+                            registro.nightscoutSyncDcid ?: "",
                             formatFloat(ratio),
                             registro.glucosaAntesMgdl?.toString() ?: "",
                             registro.glucosaDespues2hMgdl?.toString() ?: "",
@@ -157,6 +168,11 @@ class BackupManager(
                                 formatFloat(registro.hidratosTotales),
                                 formatFloat(registro.racionesCalculadas),
                                 formatFloat(registro.unidadesInsulina),
+                                registro.origenRegistro,
+                                registro.nightscoutTreatmentId ?: "",
+                                formatFloat(registro.unidadesInsulinaRemota),
+                                reconciliadoAt,
+                                registro.nightscoutSyncDcid ?: "",
                                 formatFloat(ratio),
                                 registro.glucosaAntesMgdl?.toString() ?: "",
                                 registro.glucosaDespues2hMgdl?.toString() ?: "",

@@ -3,14 +3,17 @@ package com.diabetes.calculator
 import android.app.Application
 import com.diabetes.calculator.data.database.AppDatabase
 import com.diabetes.calculator.data.repository.AlimentoRepository
+import com.diabetes.calculator.data.repository.NightscoutTreatmentTombstoneRepository
 import com.diabetes.calculator.data.repository.PendingGlucoseRepository
 import com.diabetes.calculator.data.repository.PlantillaRepository
 import com.diabetes.calculator.data.repository.RegistroComidaRepository
+import com.diabetes.calculator.data.repository.RegistroNightscoutSyncRepository
 import com.diabetes.calculator.data.repository.UsuarioProfileRepository
 import com.diabetes.calculator.data.repository.NightscoutRepository
 import com.diabetes.calculator.util.BackupManager
 import com.diabetes.calculator.util.NightscoutTokenStore
 import com.diabetes.calculator.work.AutoBackupWorker
+import com.diabetes.calculator.work.NightscoutSyncWorker
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import androidx.work.Constraints
@@ -40,6 +43,12 @@ class DiabetesApp : Application() {
     val pendingGlucoseRepository: PendingGlucoseRepository by lazy {
         PendingGlucoseRepository(database.pendingGlucoseDao())
     }
+    val registroNightscoutSyncRepository: RegistroNightscoutSyncRepository by lazy {
+        RegistroNightscoutSyncRepository(database.registroNightscoutSyncDao())
+    }
+    val nightscoutTreatmentTombstoneRepository: NightscoutTreatmentTombstoneRepository by lazy {
+        NightscoutTreatmentTombstoneRepository(database.nightscoutTreatmentTombstoneDao())
+    }
     
     // Managers
     val backupManager: BackupManager by lazy { BackupManager(database, nightscoutTokenStore) }
@@ -51,8 +60,13 @@ class DiabetesApp : Application() {
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             database.populateDatabase()
             usuarioRepository.migrateTokenIfNeeded()
+            val profile = usuarioRepository.getProfileSync()
+            if (profile?.nightscoutSyncRegistrosActivo == true) {
+                NightscoutSyncWorker.enqueueNow(WorkManager.getInstance(this@DiabetesApp))
+            }
         }
         scheduleAutoBackup()
+        NightscoutSyncWorker.enqueuePeriodic(WorkManager.getInstance(this))
     }
 
     private fun scheduleAutoBackup() {

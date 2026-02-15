@@ -39,6 +39,9 @@ interface UsuarioProfileDao {
      */
     @Update
     suspend fun update(profile: UsuarioProfile)
+
+    @Query("UPDATE usuario_profile SET nightscoutSyncBackfillDoneAt = :timestamp WHERE id = :profileId")
+    suspend fun updateNightscoutBackfillDoneAt(profileId: Int, timestamp: Long?)
     
     /**
      * Elimina todos los perfiles (para reiniciar).

@@ -249,6 +249,8 @@ private fun StatsContent(resumen: EstadisticasResumen) {
         StatRow("Comidas/día", format2(resumen.comidasPorDia))
         StatRow("Días con registros", "${resumen.diasConRegistros}/${resumen.totalDiasPeriodo}")
         StatRow("Días sin registros", resumen.diasSinRegistros.toString())
+        StatRow("Pinchazos externos", resumen.pinchazosExternos.toString())
+        StatRow("Insulina externa", "${format1(resumen.insulinaExternaTotal)} U")
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
         StatRow("Hidratos por comida", "${format1(resumen.hidratosPorComida)} g")
         StatRow("Raciones por comida", format1(resumen.racionesPorComida))

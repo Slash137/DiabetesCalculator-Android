@@ -66,6 +66,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.withStyle
@@ -814,7 +815,16 @@ private fun CorrectionModeSelector(
             selected = conCorreccion,
             onClick = { onChange(true) },
             enabled = enabled,
-            label = { Text("Dosis ajustada") },
+            label = {
+                Text(
+                    text = "Dosis ajustada",
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
             modifier = Modifier.weight(1f),
             colors = FilterChipDefaults.filterChipColors(
                 selectedContainerColor = MaterialTheme.colorScheme.primaryContainer
@@ -824,7 +834,16 @@ private fun CorrectionModeSelector(
             selected = !conCorreccion,
             onClick = { onChange(false) },
             enabled = enabled,
-            label = { Text("Dosis sin ajustar") },
+            label = {
+                Text(
+                    text = "Dosis sin ajustar",
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
             modifier = Modifier.weight(1f)
         )
     }

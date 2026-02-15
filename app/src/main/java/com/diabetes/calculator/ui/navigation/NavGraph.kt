@@ -77,6 +77,8 @@ import com.diabetes.calculator.ui.screens.perfil.PerfilScreen
 import com.diabetes.calculator.ui.screens.perfil.PerfilViewModel
 import com.diabetes.calculator.ui.screens.NightscoutViewModel
 import com.diabetes.calculator.ui.screens.NightscoutUiState
+import com.diabetes.calculator.data.repository.NightscoutRegistrosSyncSummary
+import com.diabetes.calculator.work.NightscoutSyncWorker
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -215,6 +217,10 @@ fun DiabetesNavGraph(app: DiabetesApp) {
     val nsState by nsViewModel.glucoseState.collectAsState()
     val nsStatus by nsViewModel.status.collectAsState()
     val pendingGlucose by app.pendingGlucoseRepository.pending.collectAsState(initial = emptyList())
+    val nightscoutImportCount by app.registroRepository.nightscoutImportCount.collectAsState(initial = 0)
+    val registroSyncSummary by app.registroNightscoutSyncRepository.summary.collectAsState(
+        initial = NightscoutRegistrosSyncSummary()
+    )
     val pendingMaxAttempts = pendingGlucose.maxOfOrNull { it.attempts } ?: 0
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -397,6 +403,7 @@ fun DiabetesNavGraph(app: DiabetesApp) {
                                 app.nightscoutRepository,
                                 app.plantillaRepository,
                                 app.pendingGlucoseRepository,
+                                app.registroNightscoutSyncRepository,
                                 WorkManager.getInstance(app)
                             )
                         )
@@ -422,7 +429,9 @@ fun DiabetesNavGraph(app: DiabetesApp) {
                             factory = HistorialViewModel.Factory(
                                 app.registroRepository,
                                 app.plantillaRepository,
-                                app.usuarioRepository
+                                app.usuarioRepository,
+                                app.nightscoutTreatmentTombstoneRepository,
+                                app.nightscoutRepository
                             )
                         )
                         HistorialScreen(viewModel = viewModel)
@@ -431,7 +440,8 @@ fun DiabetesNavGraph(app: DiabetesApp) {
                         val viewModel: PerfilViewModel = viewModel(
                             factory = PerfilViewModel.Factory(
                                 app.usuarioRepository,
-                                app.backupManager
+                                app.backupManager,
+                                WorkManager.getInstance(app)
                             )
                         )
                         PerfilScreen(
@@ -440,7 +450,18 @@ fun DiabetesNavGraph(app: DiabetesApp) {
                             nightscoutStatus = nsStatus,
                             pendingGlucoseCount = pendingGlucose.size,
                             pendingMaxAttempts = pendingMaxAttempts,
-                            onRefreshNightscout = nsViewModel::refreshNow
+                            onRefreshNightscout = nsViewModel::refreshNow,
+                            nightscoutRegistroSyncSummary = registroSyncSummary,
+                            nightscoutImportCount = nightscoutImportCount,
+                            onSyncRegistrosNow = {
+                                NightscoutSyncWorker.enqueueNow(
+                                    workManager = WorkManager.getInstance(app),
+                                    forceManual = true
+                                )
+                            },
+                            onResyncRegistros30d = {
+                                NightscoutSyncWorker.enqueueResync30Days(WorkManager.getInstance(app))
+                            }
                         )
                     }
                 }

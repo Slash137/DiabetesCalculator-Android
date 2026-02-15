@@ -57,6 +57,10 @@ class UsuarioProfileRepository(
         dao.update(profile.copy(nightscoutToken = null))
     }
 
+    suspend fun updateNightscoutBackfillDoneAt(profileId: Int, timestamp: Long?) {
+        dao.updateNightscoutBackfillDoneAt(profileId, timestamp)
+    }
+
     /**
      * Elimina el perfil del usuario.
      */

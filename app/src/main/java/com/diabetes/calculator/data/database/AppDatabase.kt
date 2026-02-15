@@ -8,16 +8,20 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.diabetes.calculator.BuildConfig
 import com.diabetes.calculator.data.dao.AlimentoDao
+import com.diabetes.calculator.data.dao.NightscoutTreatmentTombstoneDao
 import com.diabetes.calculator.data.dao.PlantillaDao
 import com.diabetes.calculator.data.dao.PendingGlucoseDao
 import com.diabetes.calculator.data.dao.RegistroComidaDao
+import com.diabetes.calculator.data.dao.RegistroNightscoutSyncDao
 import com.diabetes.calculator.data.dao.UsuarioProfileDao
 import com.diabetes.calculator.data.entity.Alimento
 import com.diabetes.calculator.data.entity.AlimentoEnRegistro
+import com.diabetes.calculator.data.entity.NightscoutTreatmentTombstone
 import com.diabetes.calculator.data.entity.PendingGlucose
 import com.diabetes.calculator.data.entity.PlantillaComida
 import com.diabetes.calculator.data.entity.PlantillaItem
 import com.diabetes.calculator.data.entity.RegistroComida
+import com.diabetes.calculator.data.entity.RegistroNightscoutSync
 import com.diabetes.calculator.data.entity.UsuarioProfile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,7 +29,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Base de datos Room principal de la aplicacion.
- * Version 15 con fallback destructivo solo en debug.
+ * Version 16 con fallback destructivo solo en debug.
  */
 @Database(
     entities = [
@@ -35,9 +39,11 @@ import kotlinx.coroutines.launch
         AlimentoEnRegistro::class,
         PlantillaComida::class,
         PlantillaItem::class,
-        PendingGlucose::class
+        PendingGlucose::class,
+        RegistroNightscoutSync::class,
+        NightscoutTreatmentTombstone::class
     ],
-    version = 15,
+    version = 16,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -47,6 +53,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun registroComidaDao(): RegistroComidaDao
     abstract fun plantillaDao(): PlantillaDao
     abstract fun pendingGlucoseDao(): PendingGlucoseDao
+    abstract fun registroNightscoutSyncDao(): RegistroNightscoutSyncDao
+    abstract fun nightscoutTreatmentTombstoneDao(): NightscoutTreatmentTombstoneDao
     
     companion object {
         @Volatile
@@ -74,7 +82,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_11_12,
                     MIGRATION_12_13,
                     MIGRATION_13_14,
-                    MIGRATION_14_15
+                    MIGRATION_14_15,
+                    MIGRATION_15_16
                 )
                 if (BuildConfig.DEBUG) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -265,6 +274,66 @@ abstract class AppDatabase : RoomDatabase() {
                 database.execSQL("ALTER TABLE registro_comida ADD COLUMN factorContextoTotalRaw REAL")
                 database.execSQL("ALTER TABLE registro_comida ADD COLUMN factorContextoTotalAplicado REAL")
                 database.execSQL("ALTER TABLE registro_comida ADD COLUMN factorContextoCapado INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE usuario_profile ADD COLUMN nightscoutSyncRegistrosActivo INTEGER NOT NULL DEFAULT 0"
+                )
+                database.execSQL(
+                    "ALTER TABLE usuario_profile ADD COLUMN nightscoutSyncBackfillDoneAt INTEGER"
+                )
+
+                database.execSQL(
+                    "ALTER TABLE registro_comida ADD COLUMN origenRegistro TEXT NOT NULL DEFAULT 'LOCAL'"
+                )
+                database.execSQL(
+                    "ALTER TABLE registro_comida ADD COLUMN nightscoutTreatmentId TEXT"
+                )
+                database.execSQL(
+                    "ALTER TABLE registro_comida ADD COLUMN unidadesInsulinaRemota REAL"
+                )
+                database.execSQL(
+                    "ALTER TABLE registro_comida ADD COLUMN nightscoutReconciliadoAt INTEGER"
+                )
+                database.execSQL(
+                    "ALTER TABLE registro_comida ADD COLUMN nightscoutSyncDcid TEXT"
+                )
+                database.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_registro_comida_nightscoutTreatmentId ON registro_comida(nightscoutTreatmentId)"
+                )
+
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS registro_nightscout_sync (
+                        registroId INTEGER NOT NULL,
+                        status TEXT NOT NULL,
+                        attempts INTEGER NOT NULL DEFAULT 0,
+                        lastError TEXT,
+                        updatedAt INTEGER NOT NULL,
+                        PRIMARY KEY(registroId),
+                        FOREIGN KEY(registroId) REFERENCES registro_comida(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_registro_nightscout_sync_status ON registro_nightscout_sync(status)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_registro_nightscout_sync_updatedAt ON registro_nightscout_sync(updatedAt)"
+                )
+
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS nightscout_treatment_tombstone (
+                        treatmentId TEXT NOT NULL,
+                        deletedAt INTEGER NOT NULL,
+                        PRIMARY KEY(treatmentId)
+                    )
+                    """.trimIndent()
+                )
             }
         }
     }

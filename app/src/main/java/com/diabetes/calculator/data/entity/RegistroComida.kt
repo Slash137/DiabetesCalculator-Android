@@ -26,7 +26,12 @@ import kotlinx.serialization.Serializable
  * @property factorCorreccionMgdlPorUUsado Factor de corrección usado al crear el registro (mg/dL por U)
  * @property dosisConfirmadaAt Timestamp real de aplicación si se confirmó
  */
-@Entity(tableName = "registro_comida")
+@Entity(
+    tableName = "registro_comida",
+    indices = [
+        Index(value = ["nightscoutTreatmentId"], unique = true)
+    ]
+)
 @Serializable
 data class RegistroComida(
     @PrimaryKey(autoGenerate = true)
@@ -43,6 +48,11 @@ data class RegistroComida(
     val dosisConCorreccion: Boolean? = null,
     val unidadesCorreccionSugerida: Float? = null,
     val factorCorreccionMgdlPorUUsado: Float? = null,
+    val origenRegistro: String = OrigenRegistro.LOCAL.value,
+    val nightscoutTreatmentId: String? = null,
+    val unidadesInsulinaRemota: Float? = null,
+    val nightscoutReconciliadoAt: Long? = null,
+    val nightscoutSyncDcid: String? = null,
     val franjaHorariaUsada: String? = null,
     val nivelEstresUsado: String? = null,
     val nivelEnfermedadUsado: String? = null,

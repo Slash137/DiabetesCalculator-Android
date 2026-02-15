@@ -38,6 +38,8 @@ data class UsuarioProfile(
     val recordatorio2hActivo: Boolean = false,
     val nightscoutUrl: String? = null,
     val nightscoutToken: String? = null,
+    val nightscoutSyncRegistrosActivo: Boolean = false,
+    val nightscoutSyncBackfillDoneAt: Long? = null,
     val factorHoraMadrugada: Float = 1.0f,
     val factorHoraManana: Float = 1.0f,
     val factorHoraTarde: Float = 1.0f,

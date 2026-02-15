@@ -21,6 +21,7 @@ import com.diabetes.calculator.data.repository.NightscoutRepository
 import com.diabetes.calculator.data.repository.PendingGlucoseRepository
 import com.diabetes.calculator.data.repository.PlantillaRepository
 import com.diabetes.calculator.data.repository.RegistroComidaRepository
+import com.diabetes.calculator.data.repository.RegistroNightscoutSyncRepository
 import com.diabetes.calculator.data.repository.UsuarioProfileRepository
 import com.diabetes.calculator.domain.FactoresContextoInsulina
 import com.diabetes.calculator.domain.FaseCicloHormonal
@@ -33,6 +34,7 @@ import com.diabetes.calculator.util.DateUtils
 import com.diabetes.calculator.util.NightscoutRetryPolicy
 import com.diabetes.calculator.work.Glucosa2hWorker
 import com.diabetes.calculator.work.NightscoutRetryWorker
+import com.diabetes.calculator.work.NightscoutSyncWorker
 import com.diabetes.calculator.work.Recordatorio2hWorker
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -105,6 +107,7 @@ class NuevaComidaViewModel(
     private val nightscoutRepository: NightscoutRepository,
     private val plantillaRepository: PlantillaRepository,
     private val pendingGlucoseRepository: PendingGlucoseRepository,
+    private val registroNightscoutSyncRepository: RegistroNightscoutSyncRepository,
     private val workManager: WorkManager
 ) : ViewModel() {
 
@@ -468,6 +471,10 @@ class NuevaComidaViewModel(
                 if (nightscoutEnabled) {
                     scheduleGlucosa2h(registroId)
                 }
+                if (profile.nightscoutSyncRegistrosActivo && nightscoutEnabled) {
+                    registroNightscoutSyncRepository.upsertPending(registroId)
+                    NightscoutSyncWorker.enqueueNow(workManager)
+                }
                 if (profile.recordatorio2hActivo) {
                     scheduleRecordatorio2h(registroId)
                 }
@@ -690,6 +697,7 @@ class NuevaComidaViewModel(
         private val nightscoutRepository: NightscoutRepository,
         private val plantillaRepository: PlantillaRepository,
         private val pendingGlucoseRepository: PendingGlucoseRepository,
+        private val registroNightscoutSyncRepository: RegistroNightscoutSyncRepository,
         private val workManager: WorkManager
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
@@ -702,6 +710,7 @@ class NuevaComidaViewModel(
                     nightscoutRepository,
                     plantillaRepository,
                     pendingGlucoseRepository,
+                    registroNightscoutSyncRepository,
                     workManager
                 ) as T
             }
