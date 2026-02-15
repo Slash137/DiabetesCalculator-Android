@@ -40,6 +40,7 @@ data class ResultadoCalculoAlimento(
  * @property hidratosPor100g Gramos de hidratos de carbono por cada 100g del alimento
  * @property fuente Origen de la información nutricional ("librito", "manual", "personal")
  * @property nota Nota opcional (ej: "peso cocido aprox.")
+ * @property fotoUri URI persistida de una imagen del alimento/etiqueta
  */
 @Serializable
 @Entity(tableName = "alimentos")
@@ -55,7 +56,8 @@ data class Alimento(
     val hidratosPor100ml: Float? = null,
     val unidadNombre: String? = null,
     val gramosPorUnidad: Float? = null,
-    val mlPorUnidad: Float? = null
+    val mlPorUnidad: Float? = null,
+    val fotoUri: String? = null
 )
 
 fun Alimento.tipoMedicionNormalizado(): String {

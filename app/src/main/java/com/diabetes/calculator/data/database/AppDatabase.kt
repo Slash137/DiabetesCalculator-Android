@@ -29,7 +29,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Base de datos Room principal de la aplicacion.
- * Version 18 con fallback destructivo solo en debug.
+ * Version 19 con fallback destructivo solo en debug.
  */
 @Database(
     entities = [
@@ -43,7 +43,7 @@ import kotlinx.coroutines.launch
         RegistroNightscoutSync::class,
         NightscoutTreatmentTombstone::class
     ],
-    version = 18,
+    version = 19,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -85,7 +85,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18
+                    MIGRATION_17_18,
+                    MIGRATION_18_19
                 )
                 if (BuildConfig.DEBUG) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -393,6 +394,12 @@ abstract class AppDatabase : RoomDatabase() {
                 )
             }
         }
+
+        val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE alimentos ADD COLUMN fotoUri TEXT")
+            }
+        }
     }
     
     /**
@@ -560,7 +567,8 @@ abstract class AppDatabase : RoomDatabase() {
                 hidratosPor100ml = alimento.hidratosPor100ml,
                 unidadNombre = alimento.unidadNombre,
                 gramosPorUnidad = alimento.gramosPorUnidad,
-                mlPorUnidad = alimento.mlPorUnidad
+                mlPorUnidad = alimento.mlPorUnidad,
+                fotoUri = alimento.fotoUri
             )
             if (updated == 0) {
                 alimentoDao.insert(alimento)

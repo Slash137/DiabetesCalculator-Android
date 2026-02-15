@@ -1437,13 +1437,6 @@ private fun NightscoutSyncChip(
                 tint = color,
                 modifier = Modifier.size(12.dp)
             )
-            Spacer(modifier = Modifier.width(4.dp))
-            Text(
-                text = "NS",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = color
-            )
         }
     }
 }

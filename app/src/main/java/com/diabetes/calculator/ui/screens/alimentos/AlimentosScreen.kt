@@ -1,5 +1,16 @@
 package com.diabetes.calculator.ui.screens.alimentos
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
+import android.net.Uri
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -55,14 +66,20 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import com.diabetes.calculator.data.entity.Alimento
 import com.diabetes.calculator.data.entity.EstadoFisicoAlimento
 import com.diabetes.calculator.data.entity.TipoMedicionAlimento
@@ -71,6 +88,15 @@ import com.diabetes.calculator.data.entity.tipoMedicionNormalizado
 import com.diabetes.calculator.data.entity.usaReferenciaPor100ml
 import com.diabetes.calculator.ui.components.ScrollToTopForLazyList
 import com.diabetes.calculator.ui.theme.HidratosColor
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.math.max
 
 /**
  * Pantalla de listado de alimentos.
@@ -97,6 +123,13 @@ fun AlimentosScreen(
 
     val alimentosActuales = (uiState as? AlimentosUiState.Success)?.alimentos.orEmpty()
     val selectedAlimento = alimentosActuales.firstOrNull { it.id == selectedAlimentoId }
+
+    BackHandler(enabled = showDialog || selectedAlimento != null) {
+        when {
+            showDialog -> viewModel.closeDialog()
+            selectedAlimento != null -> viewModel.closeDetail()
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
@@ -422,6 +455,27 @@ private fun AlimentoDetailScreen(
             }
         }
 
+        if (!alimento.fotoUri.isNullOrBlank()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Foto", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    FoodImageFromUri(
+                        uriString = alimento.fotoUri,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp)
+                    )
+                }
+            }
+        }
+
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -538,6 +592,281 @@ private fun DetailRow(label: String, value: String) {
     }
 }
 
+private const val PREVIEW_MAX_DIMENSION_PX = 1280
+private const val STORED_MAX_DIMENSION_PX = 1600
+private const val STORED_JPEG_QUALITY = 82
+
+private data class PendingCapturedPhoto(
+    val uri: Uri,
+    val file: File
+)
+
+@Composable
+private fun FoodImageFromUri(
+    uriString: String?,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val imageBitmap by produceState<ImageBitmap?>(initialValue = null, uriString) {
+        value = withContext(Dispatchers.IO) {
+            val cleanUri = uriString?.takeIf { it.isNotBlank() } ?: return@withContext null
+            runCatching { decodeFoodImageBitmap(context, cleanUri) }.getOrNull()
+        }
+    }
+
+    val bitmap = imageBitmap
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap,
+            contentDescription = "Foto del alimento",
+            modifier = modifier,
+            contentScale = ContentScale.Crop
+        )
+    } else {
+        Card(
+            modifier = modifier,
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
+            )
+        ) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "No se pudo cargar la imagen",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+private fun decodeFoodImageBitmap(
+    context: Context,
+    uriString: String
+): ImageBitmap? {
+    val localFile = resolveLocalFile(uriString)
+    val uri = Uri.parse(uriString)
+
+    val bitmap = if (localFile != null && localFile.exists()) {
+        decodeScaledBitmap(
+            file = localFile,
+            maxDimensionPx = PREVIEW_MAX_DIMENSION_PX
+        )
+    } else {
+        decodeScaledBitmap(
+            context = context,
+            uri = uri,
+            maxDimensionPx = PREVIEW_MAX_DIMENSION_PX
+        )
+    } ?: return null
+
+    val orientation = readExifOrientation(
+        file = localFile,
+        context = context,
+        uri = uri
+    )
+
+    return rotateBitmapByExif(bitmap, orientation).asImageBitmap()
+}
+
+private fun resolveLocalFile(value: String): File? {
+    if (value.isBlank()) return null
+    if (value.startsWith("/")) return File(value)
+
+    val parsed = Uri.parse(value)
+    return when (parsed.scheme) {
+        "file" -> parsed.path?.let { File(it) }
+        null -> File(value)
+        else -> null
+    }
+}
+
+private fun optimizeCapturedPhoto(
+    context: Context,
+    target: PendingCapturedPhoto
+): PendingCapturedPhoto? {
+    val bitmap = decodeCapturedBitmapWithRetry(
+        context = context,
+        target = target,
+        maxDimensionPx = STORED_MAX_DIMENSION_PX
+    ) ?: return null
+
+    val normalized = rotateBitmapByExif(
+        bitmap,
+        readExifOrientation(
+            file = target.file,
+            context = context,
+            uri = target.uri
+        )
+    )
+
+    val optimizedTarget = runCatching {
+        createFoodPhotoTarget(context, "food_opt")
+    }.getOrNull() ?: return null
+
+    val written = runCatching {
+        FileOutputStream(optimizedTarget.file, false).use { output ->
+            normalized.compress(Bitmap.CompressFormat.JPEG, STORED_JPEG_QUALITY, output)
+        }
+    }.getOrDefault(false)
+    if (!written || optimizedTarget.file.length() <= 0L) {
+        optimizedTarget.file.delete()
+        return null
+    }
+
+    runCatching {
+        if (target.file.exists() && target.file != optimizedTarget.file) {
+            target.file.delete()
+        }
+    }
+
+    return optimizedTarget
+}
+
+private fun decodeCapturedBitmapWithRetry(
+    context: Context,
+    target: PendingCapturedPhoto,
+    maxDimensionPx: Int
+): Bitmap? {
+    repeat(5) { attempt ->
+        val bitmap = if (target.file.exists() && target.file.length() > 0L) {
+            decodeScaledBitmap(
+                file = target.file,
+                maxDimensionPx = maxDimensionPx
+            )
+        } else {
+            decodeScaledBitmap(
+                context = context,
+                uri = target.uri,
+                maxDimensionPx = maxDimensionPx
+            )
+        }
+        if (bitmap != null) return bitmap
+        if (attempt < 4) {
+            Thread.sleep(120)
+        }
+    }
+    return null
+}
+
+private fun decodeScaledBitmap(
+    context: Context,
+    uri: Uri,
+    maxDimensionPx: Int
+): Bitmap? {
+    val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    context.contentResolver.openInputStream(uri)?.use { stream ->
+        BitmapFactory.decodeStream(stream, null, boundsOptions)
+    } ?: return null
+
+    if (boundsOptions.outWidth <= 0 || boundsOptions.outHeight <= 0) return null
+
+    val sampleSize = calculateInSampleSize(
+        width = boundsOptions.outWidth,
+        height = boundsOptions.outHeight,
+        maxDimensionPx = maxDimensionPx
+    )
+    val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+    return context.contentResolver.openInputStream(uri)?.use { stream ->
+        BitmapFactory.decodeStream(stream, null, decodeOptions)
+    }
+}
+
+private fun decodeScaledBitmap(
+    file: File,
+    maxDimensionPx: Int
+): Bitmap? {
+    val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(file.absolutePath, boundsOptions)
+    if (boundsOptions.outWidth <= 0 || boundsOptions.outHeight <= 0) return null
+
+    val sampleSize = calculateInSampleSize(
+        width = boundsOptions.outWidth,
+        height = boundsOptions.outHeight,
+        maxDimensionPx = maxDimensionPx
+    )
+    val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+    return BitmapFactory.decodeFile(file.absolutePath, decodeOptions)
+}
+
+private fun calculateInSampleSize(
+    width: Int,
+    height: Int,
+    maxDimensionPx: Int
+): Int {
+    var sampleSize = 1
+    while (max(width, height) / sampleSize > maxDimensionPx) {
+        sampleSize *= 2
+    }
+    return sampleSize
+}
+
+private fun readExifOrientation(
+    file: File? = null,
+    context: Context,
+    uri: Uri
+): Int {
+    val fileOrientation = file
+        ?.takeIf { it.exists() }
+        ?.let {
+            runCatching {
+                ExifInterface(it.absolutePath).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL
+                )
+            }.getOrNull()
+        }
+    if (fileOrientation != null) return fileOrientation
+
+    return context.contentResolver.openInputStream(uri)?.use { stream ->
+        runCatching {
+            ExifInterface(stream).getAttributeInt(
+                ExifInterface.TAG_ORIENTATION,
+                ExifInterface.ORIENTATION_NORMAL
+            )
+        }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+    } ?: ExifInterface.ORIENTATION_NORMAL
+}
+
+private fun rotateBitmapByExif(bitmap: Bitmap, orientation: Int): Bitmap {
+    val matrix = Matrix()
+    when (orientation) {
+        ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.setScale(-1f, 1f)
+        ExifInterface.ORIENTATION_ROTATE_180 -> matrix.setRotate(180f)
+        ExifInterface.ORIENTATION_FLIP_VERTICAL -> {
+            matrix.setRotate(180f)
+            matrix.postScale(-1f, 1f)
+        }
+        ExifInterface.ORIENTATION_TRANSPOSE -> {
+            matrix.setRotate(90f)
+            matrix.postScale(-1f, 1f)
+        }
+        ExifInterface.ORIENTATION_ROTATE_90 -> matrix.setRotate(90f)
+        ExifInterface.ORIENTATION_TRANSVERSE -> {
+            matrix.setRotate(-90f)
+            matrix.postScale(-1f, 1f)
+        }
+        ExifInterface.ORIENTATION_ROTATE_270 -> matrix.setRotate(-90f)
+        else -> return bitmap
+    }
+
+    return runCatching {
+        Bitmap.createBitmap(
+            bitmap,
+            0,
+            0,
+            bitmap.width,
+            bitmap.height,
+            matrix,
+            true
+        )
+    }.getOrDefault(bitmap)
+}
+
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
 private fun AlimentoEditorScreen(
@@ -556,9 +885,40 @@ private fun AlimentoEditorScreen(
     val mlPorUnidad by viewModel.dialogMlPorUnidad.collectAsState()
     val fuente by viewModel.dialogFuente.collectAsState()
     val nota by viewModel.dialogNota.collectAsState()
+    val fotoUri by viewModel.dialogFotoUri.collectAsState()
 
     val isEditing = editingAlimento != null
     val scrollState = rememberScrollState()
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    var pendingCapturePhoto by remember { mutableStateOf<PendingCapturedPhoto?>(null) }
+    var photoProcessing by remember { mutableStateOf(false) }
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success ->
+        val capturedPhoto = pendingCapturePhoto
+        pendingCapturePhoto = null
+
+        if (capturedPhoto == null) {
+            viewModel.emitMessage("Error preparando la foto")
+            return@rememberLauncherForActivityResult
+        }
+
+        if (!success) {
+            viewModel.emitMessage("No se capturó la foto")
+            return@rememberLauncherForActivityResult
+        }
+
+        coroutineScope.launch {
+            photoProcessing = true
+            val finalPhoto = withContext(Dispatchers.IO) {
+                optimizeCapturedPhoto(context, capturedPhoto)
+            } ?: capturedPhoto
+            viewModel.updateDialogFotoUri(finalPhoto.file.absolutePath)
+            photoProcessing = false
+        }
+    }
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
@@ -608,6 +968,77 @@ private fun AlimentoEditorScreen(
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp)
                 )
+
+                Text(
+                    text = "Foto del producto",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold
+                )
+                if (fotoUri.isNotBlank()) {
+                    FoodImageFromUri(
+                        uriString = fotoUri,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                    )
+                } else {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(120.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        )
+                    ) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Sin foto seleccionada",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            val photoTarget = runCatching { createFoodPhotoTarget(context) }.getOrNull()
+                            if (photoTarget == null) {
+                                viewModel.emitMessage("No se pudo abrir la cámara")
+                                return@Button
+                            }
+                            pendingCapturePhoto = photoTarget
+                            cameraLauncher.launch(photoTarget.uri)
+                        },
+                        enabled = !photoProcessing,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            when {
+                                photoProcessing -> "Procesando foto..."
+                                fotoUri.isBlank() -> "Hacer foto"
+                                else -> "Repetir foto"
+                            }
+                        )
+                    }
+                    if (fotoUri.isNotBlank() && !photoProcessing) {
+                        TextButton(
+                            onClick = { viewModel.updateDialogFotoUri(null) },
+                            modifier = Modifier.align(Alignment.CenterVertically)
+                        ) {
+                            Text("Quitar")
+                        }
+                    }
+                }
 
                 Text(
                     text = "Tipo de medición",
@@ -809,6 +1240,24 @@ private fun AlimentoEditorScreen(
         }
 
     }
+}
+
+private fun createFoodPhotoTarget(
+    context: Context,
+    namePrefix: String = "food"
+): PendingCapturedPhoto {
+    val photosDir = File(context.filesDir, "food_images").apply { mkdirs() }
+    val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+    val file = File(photosDir, "${namePrefix}_$timestamp.jpg")
+    if (!file.exists()) {
+        file.createNewFile()
+    }
+    val uri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        file
+    )
+    return PendingCapturedPhoto(uri = uri, file = file)
 }
 
 private fun tipoLabel(tipo: String): String {

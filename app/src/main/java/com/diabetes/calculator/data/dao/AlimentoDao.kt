@@ -58,7 +58,8 @@ interface AlimentoDao {
             hidratosPor100ml = COALESCE(hidratosPor100ml, :hidratosPor100ml),
             unidadNombre = COALESCE(unidadNombre, :unidadNombre),
             gramosPorUnidad = COALESCE(gramosPorUnidad, :gramosPorUnidad),
-            mlPorUnidad = COALESCE(mlPorUnidad, :mlPorUnidad)
+            mlPorUnidad = COALESCE(mlPorUnidad, :mlPorUnidad),
+            fotoUri = COALESCE(fotoUri, :fotoUri)
         WHERE nombre = :nombre
     """)
     suspend fun updateByNombre(
@@ -71,7 +72,8 @@ interface AlimentoDao {
         hidratosPor100ml: Float?,
         unidadNombre: String?,
         gramosPorUnidad: Float?,
-        mlPorUnidad: Float?
+        mlPorUnidad: Float?,
+        fotoUri: String?
     ): Int
     
     /**

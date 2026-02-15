@@ -96,6 +96,9 @@ class AlimentosViewModel(
     private val _dialogNota = MutableStateFlow("")
     val dialogNota: StateFlow<String> = _dialogNota.asStateFlow()
 
+    private val _dialogFotoUri = MutableStateFlow("")
+    val dialogFotoUri: StateFlow<String> = _dialogFotoUri.asStateFlow()
+
     // Estado de búsqueda
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
@@ -159,6 +162,7 @@ class AlimentosViewModel(
         _dialogMlPorUnidad.value = ""
         _dialogFuente.value = "personal"
         _dialogNota.value = ""
+        _dialogFotoUri.value = ""
         _showDialog.value = true
     }
 
@@ -197,6 +201,7 @@ class AlimentosViewModel(
         } ?: ""
         _dialogFuente.value = alimento.fuente
         _dialogNota.value = alimento.nota ?: ""
+        _dialogFotoUri.value = alimento.fotoUri ?: ""
         _showDialog.value = true
     }
 
@@ -265,6 +270,14 @@ class AlimentosViewModel(
         _dialogNota.value = value
     }
 
+    fun updateDialogFotoUri(value: String?) {
+        _dialogFotoUri.value = value?.trim().orEmpty()
+    }
+
+    fun emitMessage(message: String) {
+        _uiEvents.tryEmit(message)
+    }
+
     fun canSaveDialog(): Boolean {
         val nombre = _dialogNombre.value.trim()
         if (nombre.isBlank()) return false
@@ -304,6 +317,7 @@ class AlimentosViewModel(
         val nombre = _dialogNombre.value.trim()
         val fuente = _dialogFuente.value.trim()
         val nota = _dialogNota.value.trim().ifEmpty { null }
+        val fotoUri = _dialogFotoUri.value.trim().ifEmpty { null }
         val tipo = _dialogTipoMedicion.value
         val estado = _dialogEstadoFisico.value
         val hc100g = parseDecimal(_dialogHidratos100g.value)
@@ -337,7 +351,8 @@ class AlimentosViewModel(
                 hidratosPor100ml = hc100ml ?: existing?.hidratosPor100ml,
                 unidadNombre = unidadNombre,
                 gramosPorUnidad = gramosPorUnidad,
-                mlPorUnidad = mlPorUnidad
+                mlPorUnidad = mlPorUnidad,
+                fotoUri = fotoUri
             )
             if (existing != null) {
                 repository.update(alimento)
