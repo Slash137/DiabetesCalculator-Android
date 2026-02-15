@@ -46,10 +46,33 @@ interface AlimentoDao {
         UPDATE alimentos
         SET hidratosPor100g = :hidratos,
             fuente = :fuente,
-            nota = :nota
+            nota = :nota,
+            tipoMedicionPrincipal = CASE
+                WHEN tipoMedicionPrincipal IS NULL OR tipoMedicionPrincipal = '' THEN :tipoMedicionPrincipal
+                ELSE tipoMedicionPrincipal
+            END,
+            estadoFisico = CASE
+                WHEN estadoFisico IS NULL OR estadoFisico = '' THEN :estadoFisico
+                ELSE estadoFisico
+            END,
+            hidratosPor100ml = COALESCE(hidratosPor100ml, :hidratosPor100ml),
+            unidadNombre = COALESCE(unidadNombre, :unidadNombre),
+            gramosPorUnidad = COALESCE(gramosPorUnidad, :gramosPorUnidad),
+            mlPorUnidad = COALESCE(mlPorUnidad, :mlPorUnidad)
         WHERE nombre = :nombre
     """)
-    suspend fun updateByNombre(nombre: String, hidratos: Float, fuente: String, nota: String?): Int
+    suspend fun updateByNombre(
+        nombre: String,
+        hidratos: Float,
+        fuente: String,
+        nota: String?,
+        tipoMedicionPrincipal: String,
+        estadoFisico: String,
+        hidratosPor100ml: Float?,
+        unidadNombre: String?,
+        gramosPorUnidad: Float?,
+        mlPorUnidad: Float?
+    ): Int
     
     /**
      * Inserta un nuevo alimento.

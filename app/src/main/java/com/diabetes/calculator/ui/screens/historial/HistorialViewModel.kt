@@ -7,6 +7,7 @@ import com.diabetes.calculator.data.dao.RegistroComidaConItems
 import com.diabetes.calculator.data.entity.EstadoDosis
 import com.diabetes.calculator.data.entity.OrigenRegistro
 import com.diabetes.calculator.data.entity.PlantillaItem
+import com.diabetes.calculator.data.entity.UnidadConsumoAlimento
 import com.diabetes.calculator.data.repository.NightscoutRepository
 import com.diabetes.calculator.data.repository.NightscoutTreatmentTombstoneRepository
 import com.diabetes.calculator.data.repository.PlantillaRepository
@@ -236,7 +237,9 @@ class HistorialViewModel(
             PlantillaItem(
                 plantillaId = 0,
                 alimentoId = it.item.alimentoId,
-                gramos = it.item.gramosConsumidos
+                gramos = it.item.gramosConsumidos,
+                cantidad = if (it.item.cantidadConsumida > 0f) it.item.cantidadConsumida else it.item.gramosConsumidos,
+                unidad = it.item.unidadConsumida.ifBlank { UnidadConsumoAlimento.GRAMOS }
             )
         }
         if (items.isEmpty()) return

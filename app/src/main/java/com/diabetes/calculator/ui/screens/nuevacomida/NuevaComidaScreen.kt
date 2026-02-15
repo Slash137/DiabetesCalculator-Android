@@ -73,6 +73,13 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.diabetes.calculator.data.entity.Alimento
+import com.diabetes.calculator.data.entity.EstadoFisicoAlimento
+import com.diabetes.calculator.data.entity.TipoMedicionAlimento
+import com.diabetes.calculator.data.entity.UnidadConsumoAlimento
+import com.diabetes.calculator.data.entity.calcularDesdeCantidad
+import com.diabetes.calculator.data.entity.estadoFisicoNormalizado
+import com.diabetes.calculator.data.entity.requiereEquivalenciaUnidad
+import com.diabetes.calculator.data.entity.tipoMedicionNormalizado
 import com.diabetes.calculator.data.dao.PlantillaConItems
 import com.diabetes.calculator.domain.FactoresContextoInsulina
 import com.diabetes.calculator.domain.FaseCicloHormonal
@@ -203,7 +210,8 @@ fun NuevaComidaScreen(
                     onAddItem = viewModel::addItem,
                     onRemoveItem = viewModel::removeItem,
                     onUpdateItemAlimento = viewModel::updateItemAlimento,
-                    onUpdateItemGramos = viewModel::updateItemGramos,
+                    onUpdateItemCantidad = viewModel::updateItemCantidad,
+                    onConvertItemLitrosToMl = viewModel::convertItemLitrosToMl,
                     onSave = viewModel::saveRegistro,
                     canSave = viewModel.canSave(),
                     onOpenPlantillas = { showPlantillasDialog = true },
@@ -337,7 +345,8 @@ private fun NuevaComidaContent(
     onAddItem: () -> Unit,
     onRemoveItem: (ItemComidaTemporal) -> Unit,
     onUpdateItemAlimento: (ItemComidaTemporal, Alimento) -> Unit,
-    onUpdateItemGramos: (ItemComidaTemporal, String) -> Unit,
+    onUpdateItemCantidad: (ItemComidaTemporal, String) -> Unit,
+    onConvertItemLitrosToMl: (ItemComidaTemporal) -> Unit,
     onSave: () -> Unit,
     canSave: Boolean,
     onOpenPlantillas: () -> Unit,
@@ -395,7 +404,8 @@ private fun NuevaComidaContent(
                     searchQuery = searchQuery,
                     onSearchQueryChange = onSearchQueryChange,
                     onUpdateAlimento = { onUpdateItemAlimento(item, it) },
-                    onUpdateGramos = { onUpdateItemGramos(item, it) },
+                    onUpdateCantidad = { onUpdateItemCantidad(item, it) },
+                    onConvertLitrosToMl = { onConvertItemLitrosToMl(item) },
                     onRemove = { onRemoveItem(item) },
                     isOnlyItem = items.size == 1,
                     enabled = !isSaving
@@ -1118,12 +1128,29 @@ private fun ItemComidaRow(
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
     onUpdateAlimento: (Alimento) -> Unit,
-    onUpdateGramos: (String) -> Unit,
+    onUpdateCantidad: (String) -> Unit,
+    onConvertLitrosToMl: () -> Unit,
     onRemove: () -> Unit,
     isOnlyItem: Boolean,
     enabled: Boolean
 ) {
     var showSearchDialog by remember { mutableStateOf(false) }
+    val tipoMedicion = item.alimento?.tipoMedicionNormalizado() ?: TipoMedicionAlimento.GRAMOS
+    val suffix = when (tipoMedicion) {
+        TipoMedicionAlimento.ML -> "ml"
+        TipoMedicionAlimento.UNIDAD -> "ud"
+        else -> "g"
+    }
+    val labelCantidad = if (tipoMedicion == TipoMedicionAlimento.UNIDAD) {
+        "Unidades"
+    } else {
+        "Cantidad"
+    }
+    val muestraAtajoLitros = tipoMedicion == TipoMedicionAlimento.ML
+    val requiereConfigUnidad = item.alimento?.let {
+        it.tipoMedicionNormalizado() == TipoMedicionAlimento.UNIDAD &&
+            it.requiereEquivalenciaUnidad()
+    } == true
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1191,19 +1218,41 @@ private fun ItemComidaRow(
                     )
                 }
 
-                OutlinedTextField(
-                    value = item.gramosStr,
-                    onValueChange = onUpdateGramos,
-                    label = { Text("Gramos") },
+                Column(
                     modifier = Modifier.weight(0.35f),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    suffix = { Text("g") },
-                    enabled = enabled,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = MaterialTheme.colorScheme.surface,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                    horizontalAlignment = Alignment.End
+                ) {
+                    OutlinedTextField(
+                        value = item.cantidadStr,
+                        onValueChange = onUpdateCantidad,
+                        label = { Text(labelCantidad) },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        suffix = { Text(suffix) },
+                        enabled = enabled,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surface,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                        )
                     )
+                    if (muestraAtajoLitros) {
+                        TextButton(
+                            onClick = onConvertLitrosToMl,
+                            enabled = enabled && item.cantidadStr.isNotBlank()
+                        ) {
+                            Text("L\u2192ml")
+                        }
+                    }
+                }
+            }
+
+            if (requiereConfigUnidad) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Configura equivalencia en Alimentos",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
                 )
             }
 
@@ -1280,7 +1329,7 @@ private fun ItemComidaRow(
                             androidx.compose.material3.ListItem(
                                 headlineContent = { Text(alimento.nombre, fontWeight = FontWeight.Medium) },
                                 supportingContent = {
-                                    Text("${alimento.hidratosPor100g}g HC por 100g")
+                                    Text(hidratosReferenciaText(alimento))
                                 },
                                 trailingContent = {
                                     Icon(Icons.Default.Add, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
@@ -1406,7 +1455,7 @@ private fun PlantillasDialog(
                         items(filtered.size) { index ->
                             val plantilla = filtered[index]
                             val totalHidratos = plantilla.items.sumOf {
-                                (it.item.gramos * (it.alimento.hidratosPor100g / 100f)).toDouble()
+                                plantillaItemHidratos(it).toDouble()
                             }.toFloat()
                             val totalRaciones = if (gramosPorRacion > 0f) {
                                 totalHidratos / gramosPorRacion
@@ -1461,7 +1510,9 @@ private fun PlantillasDialog(
                                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                         val preview = plantilla.items.take(3)
                                         preview.forEach { item ->
-                                            val hidratosItem = item.item.gramos * (item.alimento.hidratosPor100g / 100f)
+                                            val hidratosItem = plantillaItemHidratos(item)
+                                            val cantidadItem = plantillaItemCantidad(item)
+                                            val unidadItem = unidadVisual(plantillaItemUnidad(item))
                                             val racionesItem = if (gramosPorRacion > 0f) {
                                                 hidratosItem / gramosPorRacion
                                             } else {
@@ -1487,7 +1538,7 @@ private fun PlantillasDialog(
                                                         withStyle(
                                                             SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)
                                                         ) {
-                                                            append("${format1(item.item.gramos)} g")
+                                                            append("${format1(cantidadItem)} $unidadItem")
                                                         }
                                                     },
                                                     style = MaterialTheme.typography.bodySmall,
@@ -1590,6 +1641,42 @@ private fun PlantillasDialog(
 }
 
 private fun format1(value: Float): String = String.format(Locale.getDefault(), "%.1f", value)
+
+private fun hidratosReferenciaText(alimento: Alimento): String {
+    return if (alimento.tipoMedicionNormalizado() == TipoMedicionAlimento.ML ||
+        (alimento.tipoMedicionNormalizado() == TipoMedicionAlimento.UNIDAD &&
+            alimento.estadoFisicoNormalizado() == EstadoFisicoAlimento.LIQUIDO)
+    ) {
+        val value = alimento.hidratosPor100ml ?: 0f
+        "${format1(value)}g HC por 100ml"
+    } else {
+        "${format1(alimento.hidratosPor100g)}g HC por 100g"
+    }
+}
+
+private fun plantillaItemCantidad(item: com.diabetes.calculator.data.dao.PlantillaItemConAlimento): Float {
+    return if (item.item.cantidad > 0f) item.item.cantidad else item.item.gramos
+}
+
+private fun plantillaItemUnidad(item: com.diabetes.calculator.data.dao.PlantillaItemConAlimento): String {
+    if (item.item.cantidad > 0f) return item.item.unidad
+    return UnidadConsumoAlimento.GRAMOS
+}
+
+private fun plantillaItemHidratos(item: com.diabetes.calculator.data.dao.PlantillaItemConAlimento): Float {
+    val cantidad = plantillaItemCantidad(item)
+    val alimento = item.alimento
+    val resultado = alimento.calcularDesdeCantidad(cantidad)
+    return resultado?.hidratos ?: 0f
+}
+
+private fun unidadVisual(unidad: String): String {
+    return when (unidad) {
+        UnidadConsumoAlimento.ML -> "ml"
+        UnidadConsumoAlimento.UNIDAD -> "ud"
+        else -> "g"
+    }
+}
 
 @Composable
 private fun TemplateStat(

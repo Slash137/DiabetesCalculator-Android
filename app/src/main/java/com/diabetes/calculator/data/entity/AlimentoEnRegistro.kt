@@ -44,5 +44,7 @@ data class AlimentoEnRegistro(
     val registroId: Int,
     val alimentoId: Int,
     val gramosConsumidos: Float,
-    val hidratosCalculados: Float
+    val hidratosCalculados: Float,
+    val cantidadConsumida: Float = 0f,
+    val unidadConsumida: String = UnidadConsumoAlimento.GRAMOS
 )

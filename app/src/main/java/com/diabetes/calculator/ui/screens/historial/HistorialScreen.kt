@@ -827,7 +827,7 @@ private fun RegistroCard(
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    text = "(${item.item.gramosConsumidos.toInt()}g)",
+                                    text = "(${cantidadConsumidaLabel(item.item.cantidadConsumida, item.item.unidadConsumida, item.item.gramosConsumidos)})",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1220,7 +1220,11 @@ private fun RegistroDetalleBottomSheet(
                                 fontWeight = FontWeight.Medium
                             )
                             Text(
-                                text = "${item.item.gramosConsumidos.toInt()} g",
+                                text = cantidadConsumidaLabel(
+                                    item.item.cantidadConsumida,
+                                    item.item.unidadConsumida,
+                                    item.item.gramosConsumidos
+                                ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1887,6 +1891,22 @@ private fun formatFactorCorreccion(value: Float): String {
     } else {
         String.format("%.1f", value)
     }
+}
+
+private fun cantidadConsumidaLabel(
+    cantidadConsumida: Float,
+    unidadConsumida: String?,
+    gramosConsumidos: Float
+): String {
+    val cantidad = if (cantidadConsumida > 0f) cantidadConsumida else gramosConsumidos
+    val unidad = when (unidadConsumida) {
+        "ml" -> "ml"
+        "unidad" -> "ud"
+        else -> "g"
+    }
+    val isInteger = kotlin.math.abs(cantidad - cantidad.toInt().toFloat()) < 0.05f
+    val valor = if (isInteger) String.format("%.0f", cantidad) else String.format("%.1f", cantidad)
+    return "$valor $unidad"
 }
 
 private data class ItemMetrics(

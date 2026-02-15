@@ -36,5 +36,7 @@ data class PlantillaItem(
     val id: Int = 0,
     val plantillaId: Int,
     val alimentoId: Int,
-    val gramos: Float
+    val gramos: Float,
+    val cantidad: Float = 0f,
+    val unidad: String = UnidadConsumoAlimento.GRAMOS
 )

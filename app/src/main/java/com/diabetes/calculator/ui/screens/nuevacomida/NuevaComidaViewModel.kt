@@ -11,11 +11,18 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.diabetes.calculator.data.entity.Alimento
 import com.diabetes.calculator.data.entity.AlimentoEnRegistro
+import com.diabetes.calculator.data.entity.EstadoFisicoAlimento
 import com.diabetes.calculator.data.entity.PendingGlucose
 import com.diabetes.calculator.data.entity.PendingGlucoseTipo
 import com.diabetes.calculator.data.entity.PlantillaItem
 import com.diabetes.calculator.data.entity.RegistroComida
+import com.diabetes.calculator.data.entity.TipoMedicionAlimento
+import com.diabetes.calculator.data.entity.UnidadConsumoAlimento
 import com.diabetes.calculator.data.entity.UsuarioProfile
+import com.diabetes.calculator.data.entity.calcularDesdeCantidad
+import com.diabetes.calculator.data.entity.estadoFisicoNormalizado
+import com.diabetes.calculator.data.entity.requiereEquivalenciaUnidad
+import com.diabetes.calculator.data.entity.tipoMedicionNormalizado
 import com.diabetes.calculator.data.repository.AlimentoRepository
 import com.diabetes.calculator.data.repository.NightscoutRepository
 import com.diabetes.calculator.data.repository.PendingGlucoseRepository
@@ -53,8 +60,11 @@ import java.util.concurrent.TimeUnit
 data class ItemComidaTemporal(
     val id: Long = System.nanoTime(),
     val alimento: Alimento? = null,
-    val gramosStr: String = "",
-    val hidratos: Float = 0f
+    val cantidadStr: String = "",
+    val hidratos: Float = 0f,
+    val cantidadBase: Float = 0f,
+    val unidadBase: String = UnidadConsumoAlimento.GRAMOS,
+    val configuracionIncompleta: Boolean = false
 )
 
 /**
@@ -286,10 +296,11 @@ class NuevaComidaViewModel(
         val alimentosById = cachedAlimentos.associateBy { it.id }
         val nuevosItems = plantilla.items.mapNotNull { item ->
             val alimento = alimentosById[item.item.alimentoId] ?: return@mapNotNull null
-            ItemComidaTemporal(
+            val cantidad = cantidadPlantillaConFallback(item.item)
+            buildItemState(
+                base = ItemComidaTemporal(),
                 alimento = alimento,
-                gramosStr = formatGramos(item.item.gramos),
-                hidratos = (alimento.hidratosPor100g * item.item.gramos) / 100f
+                cantidadStr = formatCantidad(cantidad)
             )
         }
         if (nuevosItems.isNotEmpty()) {
@@ -299,7 +310,11 @@ class NuevaComidaViewModel(
     }
 
     fun savePlantilla(nombre: String) {
-        val itemsValidos = _items.value.filter { it.alimento != null && (parseDecimal(it.gramosStr) ?: 0f) > 0f }
+        if (hasBlockingUnitConfigurationIssue()) {
+            _uiEvents.tryEmit("Configura equivalencia en Alimentos")
+            return
+        }
+        val itemsValidos = _items.value.mapNotNull { toPlantillaItemOrNull(it) }
         if (itemsValidos.isEmpty()) {
             _uiEvents.tryEmit("No hay alimentos válidos para guardar la plantilla")
             return
@@ -310,14 +325,7 @@ class NuevaComidaViewModel(
             return
         }
         viewModelScope.launch {
-            val plantillaItems = itemsValidos.map {
-                PlantillaItem(
-                    plantillaId = 0,
-                    alimentoId = it.alimento!!.id,
-                    gramos = parseDecimal(it.gramosStr) ?: 0f
-                )
-            }
-            plantillaRepository.insertPlantilla(cleanName, plantillaItems)
+            plantillaRepository.insertPlantilla(cleanName, itemsValidos)
             _uiEvents.tryEmit("Plantilla guardada")
         }
     }
@@ -333,27 +341,38 @@ class NuevaComidaViewModel(
         val current = _items.value.toMutableList()
         val index = current.indexOfFirst { it.id == item.id }
         if (index != -1) {
-            val gramos = parseDecimal(current[index].gramosStr) ?: 0f
-            val hidratos = (alimento.hidratosPor100g * gramos) / 100f
-            current[index] = current[index].copy(alimento = alimento, hidratos = hidratos)
+            current[index] = buildItemState(
+                base = current[index],
+                alimento = alimento,
+                cantidadStr = current[index].cantidadStr
+            )
             _items.value = current
             recalculate()
         }
     }
 
-    fun updateItemGramos(item: ItemComidaTemporal, gramosStr: String) {
-        if (gramosStr.isNotEmpty() && !gramosStr.matches(Regex("^\\d*([\\.,]\\d*)?$"))) return
+    fun updateItemCantidad(item: ItemComidaTemporal, cantidadStr: String) {
+        if (cantidadStr.isNotEmpty() && !cantidadStr.matches(Regex("^\\d*([\\.,]\\d*)?$"))) return
 
         val current = _items.value.toMutableList()
         val index = current.indexOfFirst { it.id == item.id }
         if (index != -1) {
-            val alimento = current[index].alimento
-            val gramos = parseDecimal(gramosStr) ?: 0f
-            val hidratos = if (alimento != null) (alimento.hidratosPor100g * gramos) / 100f else 0f
-            current[index] = current[index].copy(gramosStr = gramosStr, hidratos = hidratos)
+            current[index] = buildItemState(
+                base = current[index],
+                alimento = current[index].alimento,
+                cantidadStr = cantidadStr
+            )
             _items.value = current
             recalculate()
         }
+    }
+
+    fun convertItemLitrosToMl(item: ItemComidaTemporal) {
+        val alimento = item.alimento ?: return
+        if (alimento.tipoMedicionNormalizado() != TipoMedicionAlimento.ML) return
+        val current = parseDecimal(item.cantidadStr) ?: return
+        val ml = current * 1000f
+        updateItemCantidad(item, formatCantidad(ml))
     }
 
     private fun recalculate() {
@@ -375,12 +394,19 @@ class NuevaComidaViewModel(
         if (profile.gramosPorRacion <= 0f || profile.ratioInsulina <= 0f) {
             return false
         }
-        return _items.value.any { it.alimento != null && (parseDecimal(it.gramosStr) ?: 0f) > 0f }
+        if (hasBlockingUnitConfigurationIssue()) {
+            return false
+        }
+        return _items.value.any { isItemValidForSave(it) }
     }
 
     fun saveRegistro() {
         val profile = cachedProfile ?: return
-        val validItems = _items.value.filter { it.alimento != null && (parseDecimal(it.gramosStr) ?: 0f) > 0f }
+        if (hasBlockingUnitConfigurationIssue()) {
+            _uiEvents.tryEmit("Configura equivalencia en Alimentos")
+            return
+        }
+        val validItems = _items.value.filter { isItemValidForSave(it) }
 
         viewModelScope.launch {
             _isSaving.value = true
@@ -408,7 +434,7 @@ class NuevaComidaViewModel(
                     }
                 }
 
-                val totalHidratos = _items.value.sumOf { it.hidratos.toDouble() }.toFloat()
+                val totalHidratos = validItems.sumOf { it.hidratos.toDouble() }.toFloat()
                 val calc = buildCalculo(
                     profile = profile,
                     totalHidratos = totalHidratos,
@@ -457,14 +483,22 @@ class NuevaComidaViewModel(
                     factorContextoCapado = calc.factorContextoCapado
                 )
 
-                val itemsEntities = validItems.map {
-                    val gramos = parseDecimal(it.gramosStr) ?: 0f
+                val itemsEntities = validItems.mapNotNull { item ->
+                    val alimento = item.alimento ?: return@mapNotNull null
+                    val cantidad = parseDecimal(item.cantidadStr) ?: return@mapNotNull null
+                    val resultado = alimento.calcularDesdeCantidad(cantidad) ?: return@mapNotNull null
                     AlimentoEnRegistro(
                         registroId = 0,
-                        alimentoId = it.alimento!!.id,
-                        gramosConsumidos = gramos,
-                        hidratosCalculados = it.hidratos
+                        alimentoId = alimento.id,
+                        gramosConsumidos = resultado.cantidadBase,
+                        hidratosCalculados = resultado.hidratos,
+                        cantidadConsumida = cantidad,
+                        unidadConsumida = unidadConsumidaPara(alimento)
                     )
+                }
+                if (itemsEntities.isEmpty()) {
+                    _uiEvents.tryEmit("No se pudo calcular la comida con los datos actuales")
+                    return@launch
                 }
 
                 val registroId = registroRepository.insertRegistroCompleto(registro, itemsEntities)
@@ -609,11 +643,99 @@ class NuevaComidaViewModel(
         _saveSuccess.value = false
     }
 
+    private fun buildItemState(
+        base: ItemComidaTemporal,
+        alimento: Alimento?,
+        cantidadStr: String
+    ): ItemComidaTemporal {
+        if (alimento == null) {
+            return base.copy(
+                alimento = null,
+                cantidadStr = cantidadStr,
+                hidratos = 0f,
+                cantidadBase = 0f,
+                unidadBase = UnidadConsumoAlimento.GRAMOS,
+                configuracionIncompleta = false
+            )
+        }
+
+        val cantidad = parseDecimal(cantidadStr) ?: 0f
+        val resultado = alimento.calcularDesdeCantidad(cantidad)
+        val unidadBase = resultado?.unidadBase ?: defaultUnidadBase(alimento)
+
+        return base.copy(
+            alimento = alimento,
+            cantidadStr = cantidadStr,
+            hidratos = resultado?.hidratos ?: 0f,
+            cantidadBase = resultado?.cantidadBase ?: 0f,
+            unidadBase = unidadBase,
+            configuracionIncompleta = alimento.tipoMedicionNormalizado() == TipoMedicionAlimento.UNIDAD &&
+                alimento.requiereEquivalenciaUnidad()
+        )
+    }
+
+    private fun hasBlockingUnitConfigurationIssue(): Boolean {
+        return _items.value.any { item ->
+            val alimento = item.alimento ?: return@any false
+            alimento.tipoMedicionNormalizado() == TipoMedicionAlimento.UNIDAD &&
+                alimento.requiereEquivalenciaUnidad()
+        }
+    }
+
+    private fun isItemValidForSave(item: ItemComidaTemporal): Boolean {
+        val alimento = item.alimento ?: return false
+        val cantidad = parseDecimal(item.cantidadStr) ?: return false
+        if (cantidad <= 0f) return false
+        if (alimento.tipoMedicionNormalizado() == TipoMedicionAlimento.UNIDAD &&
+            alimento.requiereEquivalenciaUnidad()
+        ) {
+            return false
+        }
+        return alimento.calcularDesdeCantidad(cantidad) != null
+    }
+
+    private fun toPlantillaItemOrNull(item: ItemComidaTemporal): PlantillaItem? {
+        val alimento = item.alimento ?: return null
+        val cantidad = parseDecimal(item.cantidadStr) ?: return null
+        if (cantidad <= 0f) return null
+        val resultado = alimento.calcularDesdeCantidad(cantidad) ?: return null
+        return PlantillaItem(
+            plantillaId = 0,
+            alimentoId = alimento.id,
+            gramos = resultado.cantidadBase,
+            cantidad = cantidad,
+            unidad = unidadConsumidaPara(alimento)
+        )
+    }
+
+    private fun cantidadPlantillaConFallback(item: PlantillaItem): Float {
+        return if (item.cantidad > 0f) item.cantidad else item.gramos
+    }
+
+    private fun unidadConsumidaPara(alimento: Alimento): String {
+        return when (alimento.tipoMedicionNormalizado()) {
+            TipoMedicionAlimento.ML -> UnidadConsumoAlimento.ML
+            TipoMedicionAlimento.UNIDAD -> UnidadConsumoAlimento.UNIDAD
+            else -> UnidadConsumoAlimento.GRAMOS
+        }
+    }
+
+    private fun defaultUnidadBase(alimento: Alimento): String {
+        return if (alimento.tipoMedicionNormalizado() == TipoMedicionAlimento.ML ||
+            (alimento.tipoMedicionNormalizado() == TipoMedicionAlimento.UNIDAD &&
+                alimento.estadoFisicoNormalizado() == EstadoFisicoAlimento.LIQUIDO)
+        ) {
+            UnidadConsumoAlimento.ML
+        } else {
+            UnidadConsumoAlimento.GRAMOS
+        }
+    }
+
     private fun parseDecimal(value: String): Float? {
         return value.trim().replace(',', '.').toFloatOrNull()
     }
 
-    private fun formatGramos(value: Float): String {
+    private fun formatCantidad(value: Float): String {
         return if (value % 1f == 0f) {
             String.format("%.0f", value)
         } else {
