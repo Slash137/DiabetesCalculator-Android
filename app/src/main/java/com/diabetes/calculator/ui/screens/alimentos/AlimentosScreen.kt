@@ -4,6 +4,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,7 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -69,7 +70,7 @@ import com.diabetes.calculator.ui.theme.HidratosColor
  * Pantalla de listado de alimentos.
  * Permite ver, añadir, editar y eliminar alimentos.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AlimentosScreen(
     viewModel: AlimentosViewModel
@@ -497,6 +498,7 @@ private fun DetailRow(label: String, value: String) {
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun AlimentoEditorScreen(
     viewModel: AlimentosViewModel,
     onBack: () -> Unit
@@ -572,13 +574,13 @@ private fun AlimentoEditorScreen(
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold
                 )
-                LazyRow(
+                FlowRow(
                     modifier = Modifier
                         .fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(horizontal = 2.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(TipoMedicionAlimento.all.toList(), key = { it }) { option ->
+                    TipoMedicionAlimento.all.forEach { option ->
                         FilterChip(
                             selected = tipoMedicion == option,
                             onClick = { viewModel.updateDialogTipoMedicion(option) },
@@ -593,13 +595,13 @@ private fun AlimentoEditorScreen(
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold
                     )
-                    LazyRow(
+                    FlowRow(
                         modifier = Modifier
                             .fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        contentPadding = PaddingValues(horizontal = 2.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(EstadoFisicoAlimento.all.toList(), key = { it }) { option ->
+                        EstadoFisicoAlimento.all.forEach { option ->
                             FilterChip(
                                 selected = estadoFisico == option,
                                 onClick = { viewModel.updateDialogEstadoFisico(option) },
@@ -645,15 +647,15 @@ private fun AlimentoEditorScreen(
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold
                     )
-                    LazyRow(
+                    FlowRow(
                         modifier = Modifier
                             .fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        contentPadding = PaddingValues(horizontal = 2.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         val opcionesUnidad = AlimentosViewModel.UNIDADES_RAPIDAS +
                             AlimentosViewModel.UNIDAD_PERSONALIZADA
-                        items(opcionesUnidad, key = { it }) { unidad ->
+                        opcionesUnidad.forEach { unidad ->
                             FilterChip(
                                 selected = unidadPreset == unidad,
                                 onClick = { viewModel.updateDialogUnidadPreset(unidad) },
