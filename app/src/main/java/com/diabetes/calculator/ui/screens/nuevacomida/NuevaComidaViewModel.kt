@@ -367,14 +367,6 @@ class NuevaComidaViewModel(
         }
     }
 
-    fun convertItemLitrosToMl(item: ItemComidaTemporal) {
-        val alimento = item.alimento ?: return
-        if (alimento.tipoMedicionNormalizado() != TipoMedicionAlimento.ML) return
-        val current = parseDecimal(item.cantidadStr) ?: return
-        val ml = current * 1000f
-        updateItemCantidad(item, formatCantidad(ml))
-    }
-
     private fun recalculate() {
         val profile = cachedProfile ?: return
         val totalHidratos = _items.value.sumOf { it.hidratos.toDouble() }.toFloat()

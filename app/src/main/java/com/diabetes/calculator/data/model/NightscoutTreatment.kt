@@ -25,6 +25,7 @@ data class NightscoutTreatment(
 data class NightscoutCreateTreatmentRequest(
     val eventType: String,
     val insulin: Float,
+    val carbs: Float? = null,
     @SerialName("created_at")
     val createdAt: String,
     val notes: String? = null,

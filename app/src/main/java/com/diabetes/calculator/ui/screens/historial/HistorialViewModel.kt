@@ -140,7 +140,17 @@ class HistorialViewModel(
 
     fun updateDoseStatus(registroId: Int, status: EstadoDosis) {
         viewModelScope.launch {
+            if (status == EstadoDosis.OMITIDA) {
+                val registro = repository.getRegistroRawById(registroId)
+                val treatmentId = registro?.nightscoutTreatmentId
+                if (!treatmentId.isNullOrBlank()) {
+                    nightscoutTreatmentTombstoneRepository.add(treatmentId)
+                }
+            }
             repository.updateDosisEstado(registroId, status)
+            if (status == EstadoDosis.OMITIDA) {
+                repository.clearNightscoutLink(registroId)
+            }
         }
     }
 

@@ -57,13 +57,17 @@ class NightscoutSyncWorker(
         }
         val toMillis = now
         val ignoreTombstones = manualResyncDays > 0 && manualIgnoreTombstones
+        val enqueueAllLocalRecords = forceManual && manualResyncDays <= 0
+        val enqueueFromMillis = if (manualResyncDays > 0) fromMillis else null
 
         val runResult = runCatching {
             service.sync(
                 profile = profile,
                 fromMillis = fromMillis,
                 toMillis = toMillis,
-                ignoreTombstones = ignoreTombstones
+                ignoreTombstones = ignoreTombstones,
+                enqueueAllLocalRecords = enqueueAllLocalRecords,
+                enqueueFromMillis = enqueueFromMillis
             )
         }.getOrElse {
             val delay = NightscoutRetryPolicy.nextDelayMinutes(1)

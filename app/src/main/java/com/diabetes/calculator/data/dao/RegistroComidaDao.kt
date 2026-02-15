@@ -82,6 +82,14 @@ interface RegistroComidaDao {
             nightscoutReconciliadoAt = :reconciliadoAt,
             nightscoutSyncDcid = :dcid
         WHERE id = :registroId
+          AND (
+            :treatmentId IS NULL OR NOT EXISTS (
+                SELECT 1
+                FROM registro_comida other
+                WHERE other.nightscoutTreatmentId = :treatmentId
+                  AND other.id != :registroId
+            )
+          )
         """
     )
     suspend fun updateNightscoutLink(
@@ -90,7 +98,30 @@ interface RegistroComidaDao {
         unidadesInsulinaRemota: Float?,
         reconciliadoAt: Long?,
         dcid: String?
+    ): Int
+
+    @Query(
+        """
+        UPDATE registro_comida
+        SET nightscoutSyncDcid = :dcid
+        WHERE id = :registroId
+        """
     )
+    suspend fun updateNightscoutSyncDcid(
+        registroId: Int,
+        dcid: String?
+    )
+
+    @Query(
+        """
+        UPDATE registro_comida
+        SET nightscoutTreatmentId = NULL,
+            unidadesInsulinaRemota = NULL,
+            nightscoutReconciliadoAt = NULL
+        WHERE id = :registroId
+        """
+    )
+    suspend fun clearNightscoutLink(registroId: Int)
 
     @Query("SELECT * FROM alimento_en_registro")
     suspend fun getAllItemsRaw(): List<AlimentoEnRegistro>

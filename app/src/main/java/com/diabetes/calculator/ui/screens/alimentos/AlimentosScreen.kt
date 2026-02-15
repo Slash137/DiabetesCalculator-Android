@@ -4,8 +4,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,7 +14,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -24,6 +24,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Restaurant
@@ -33,14 +34,18 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -64,13 +69,14 @@ import com.diabetes.calculator.data.entity.TipoMedicionAlimento
 import com.diabetes.calculator.data.entity.estadoFisicoNormalizado
 import com.diabetes.calculator.data.entity.tipoMedicionNormalizado
 import com.diabetes.calculator.data.entity.usaReferenciaPor100ml
+import com.diabetes.calculator.ui.components.ScrollToTopForLazyList
 import com.diabetes.calculator.ui.theme.HidratosColor
 
 /**
  * Pantalla de listado de alimentos.
  * Permite ver, añadir, editar y eliminar alimentos.
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlimentosScreen(
     viewModel: AlimentosViewModel
@@ -80,6 +86,7 @@ fun AlimentosScreen(
     val searchQuery by viewModel.searchQuery.collectAsState()
     val selectedAlimentoId by viewModel.selectedAlimentoId.collectAsState()
     var pendingDelete by remember { mutableStateOf<Alimento?>(null) }
+    val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(Unit) {
@@ -146,6 +153,7 @@ fun AlimentosScreen(
                         is AlimentosUiState.Success -> {
                             AlimentosList(
                                 alimentos = state.alimentos,
+                                listState = listState,
                                 onOpen = viewModel::openDetail,
                                 onEdit = viewModel::openEditDialog,
                                 onDelete = { pendingDelete = it }
@@ -180,6 +188,15 @@ fun AlimentosScreen(
             ) {
                 Icon(Icons.Default.Add, contentDescription = "Añadir alimento")
             }
+        }
+
+        if (selectedAlimento == null && !showDialog && uiState is AlimentosUiState.Success) {
+            ScrollToTopForLazyList(
+                listState = listState,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(24.dp)
+            )
         }
 
         SnackbarHost(
@@ -255,11 +272,13 @@ private fun EmptyAlimentosView(
 @Composable
 private fun AlimentosList(
     alimentos: List<Alimento>,
+    listState: LazyListState,
     onOpen: (Alimento) -> Unit,
     onEdit: (Alimento) -> Unit,
     onDelete: (Alimento) -> Unit
 ) {
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(
@@ -364,11 +383,15 @@ private fun AlimentoDetailScreen(
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+    val scrollState = rememberScrollState()
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+                .verticalScroll(scrollState),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -411,7 +434,6 @@ private fun AlimentoDetailScreen(
                 Text("Identificación", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 DetailRow("Nombre", alimento.nombre)
                 DetailRow("Fuente", alimento.fuente.ifBlank { "-" })
-                DetailRow("Nota", alimento.nota?.ifBlank { "-" } ?: "-")
             }
         }
 
@@ -471,6 +493,25 @@ private fun AlimentoDetailScreen(
                 }
             }
         }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("Notas", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text(
+                    text = alimento.nota?.ifBlank { "Sin notas" } ?: "Sin notas",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+        }
     }
 }
 
@@ -498,7 +539,7 @@ private fun DetailRow(label: String, value: String) {
 }
 
 @Composable
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 private fun AlimentoEditorScreen(
     viewModel: AlimentosViewModel,
     onBack: () -> Unit
@@ -517,15 +558,15 @@ private fun AlimentoEditorScreen(
     val nota by viewModel.dialogNota.collectAsState()
 
     val isEditing = editingAlimento != null
-    val canSave = viewModel.canSaveDialog()
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+    val scrollState = rememberScrollState()
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+                .verticalScroll(scrollState),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -543,18 +584,17 @@ private fun AlimentoEditorScreen(
             }
             Button(
                 onClick = viewModel::saveAlimento,
-                enabled = canSave,
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Text("Guardar")
             }
         }
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-            shape = RoundedCornerShape(16.dp)
-        ) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                shape = RoundedCornerShape(16.dp)
+            ) {
             Column(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -574,17 +614,20 @@ private fun AlimentoEditorScreen(
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold
                 )
-                FlowRow(
-                    modifier = Modifier
-                        .fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                val tipoOptions = listOf(
+                    TipoMedicionAlimento.GRAMOS,
+                    TipoMedicionAlimento.ML,
+                    TipoMedicionAlimento.UNIDAD
+                )
+                SingleChoiceSegmentedButtonRow(
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    TipoMedicionAlimento.all.forEach { option ->
-                        FilterChip(
+                    tipoOptions.forEachIndexed { index, option ->
+                        SegmentedButton(
                             selected = tipoMedicion == option,
                             onClick = { viewModel.updateDialogTipoMedicion(option) },
-                            label = { Text(tipoLabel(option)) }
+                            shape = SegmentedButtonDefaults.itemShape(index = index, count = tipoOptions.size),
+                            label = { Text(tipoSelectorLabel(option)) }
                         )
                     }
                 }
@@ -595,17 +638,20 @@ private fun AlimentoEditorScreen(
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold
                     )
-                    FlowRow(
-                        modifier = Modifier
-                            .fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    val estadoOptions = listOf(
+                        EstadoFisicoAlimento.SOLIDO,
+                        EstadoFisicoAlimento.SOLIDO_BLANDO,
+                        EstadoFisicoAlimento.LIQUIDO
+                    )
+                    SingleChoiceSegmentedButtonRow(
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        EstadoFisicoAlimento.all.forEach { option ->
-                            FilterChip(
+                        estadoOptions.forEachIndexed { index, option ->
+                            SegmentedButton(
                                 selected = estadoFisico == option,
                                 onClick = { viewModel.updateDialogEstadoFisico(option) },
-                                label = { Text(estadoLabel(option)) }
+                                shape = SegmentedButtonDefaults.itemShape(index = index, count = estadoOptions.size),
+                                label = { Text(estadoSelectorLabel(option)) }
                             )
                         }
                     }
@@ -647,28 +693,59 @@ private fun AlimentoEditorScreen(
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold
                     )
-                    FlowRow(
-                        modifier = Modifier
-                            .fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    var unidadExpanded by remember { mutableStateOf(false) }
+                    val unidadOptions = AlimentosViewModel.UNIDADES_RAPIDAS +
+                        AlimentosViewModel.UNIDAD_PERSONALIZADA
+                    Box(
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        val opcionesUnidad = AlimentosViewModel.UNIDADES_RAPIDAS +
-                            AlimentosViewModel.UNIDAD_PERSONALIZADA
-                        opcionesUnidad.forEach { unidad ->
-                            FilterChip(
-                                selected = unidadPreset == unidad,
-                                onClick = { viewModel.updateDialogUnidadPreset(unidad) },
-                                label = {
-                                    Text(
-                                        if (unidad == AlimentosViewModel.UNIDAD_PERSONALIZADA) {
-                                            "Personalizado"
-                                        } else {
-                                            unidad
-                                        }
+                        OutlinedTextField(
+                            value = unidadPreset.ifBlank { AlimentosViewModel.UNIDADES_RAPIDAS.first() }
+                                .let {
+                                    if (it == AlimentosViewModel.UNIDAD_PERSONALIZADA) {
+                                        "Personalizado"
+                                    } else {
+                                        it
+                                    }
+                                },
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Unidad predefinida") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { unidadExpanded = true },
+                            trailingIcon = {
+                                IconButton(onClick = { unidadExpanded = !unidadExpanded }) {
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = "Abrir unidades"
                                     )
                                 }
-                            )
+                            },
+                            shape = RoundedCornerShape(12.dp)
+                        )
+
+                        DropdownMenu(
+                            expanded = unidadExpanded,
+                            onDismissRequest = { unidadExpanded = false }
+                        ) {
+                            unidadOptions.forEach { unidad ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (unidad == AlimentosViewModel.UNIDAD_PERSONALIZADA) {
+                                                "Personalizado"
+                                            } else {
+                                                unidad
+                                            }
+                                        )
+                                    },
+                                    onClick = {
+                                        viewModel.updateDialogUnidadPreset(unidad)
+                                        unidadExpanded = false
+                                    }
+                                )
+                            }
                         }
                     }
                     if (unidadPreset == AlimentosViewModel.UNIDAD_PERSONALIZADA) {
@@ -728,7 +805,9 @@ private fun AlimentoEditorScreen(
                     shape = RoundedCornerShape(12.dp)
                 )
             }
+            }
         }
+
     }
 }
 
@@ -741,10 +820,28 @@ private fun tipoLabel(tipo: String): String {
     }
 }
 
+private fun tipoSelectorLabel(tipo: String): String {
+    return when (tipo) {
+        TipoMedicionAlimento.GRAMOS -> "Gramos"
+        TipoMedicionAlimento.ML -> "Mililitros"
+        TipoMedicionAlimento.UNIDAD -> "Unidad"
+        else -> tipo
+    }
+}
+
 private fun estadoLabel(estado: String): String {
     return when (estado) {
         EstadoFisicoAlimento.SOLIDO -> "Sólido"
         EstadoFisicoAlimento.SOLIDO_BLANDO -> "Sólido blando"
+        EstadoFisicoAlimento.LIQUIDO -> "Líquido"
+        else -> estado
+    }
+}
+
+private fun estadoSelectorLabel(estado: String): String {
+    return when (estado) {
+        EstadoFisicoAlimento.SOLIDO -> "Sólido"
+        EstadoFisicoAlimento.SOLIDO_BLANDO -> "Blando"
         EstadoFisicoAlimento.LIQUIDO -> "Líquido"
         else -> estado
     }

@@ -1,5 +1,6 @@
 package com.diabetes.calculator.ui.screens.historial
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -20,7 +21,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -54,6 +57,7 @@ import com.diabetes.calculator.domain.NivelEjercicio
 import com.diabetes.calculator.domain.NivelEnfermedad
 import com.diabetes.calculator.domain.NivelEstres
 import com.diabetes.calculator.util.DateUtils
+import com.diabetes.calculator.ui.components.ScrollToTopForLazyList
 import com.diabetes.calculator.work.NightscoutSyncWorker
 import java.util.Locale
 
@@ -113,6 +117,7 @@ fun HistorialScreen(
     var glucosaAjustadaAntes by remember { mutableStateOf<Int?>(null) }
     var glucosaAjustadaDespues by remember { mutableStateOf<Int?>(null) }
     var cargandoGlucosaAjustada by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
 
     val onUpdateDoseStatus: (RegistroComidaConItems, EstadoDosis) -> Unit = { registro, nuevoEstado ->
         val anterior = EstadoDosis.fromValue(registro.registro.dosisEstado)
@@ -355,9 +360,9 @@ fun HistorialScreen(
                 }
                 is HistorialUiState.Success -> {
                     HistorialList(
+                        listState = listState,
                         registros = state.registros,
-                        onOpenDetail = { detailRegistro = it },
-                        onDelete = { pendingDelete = it }
+                        onOpenDetail = { detailRegistro = it }
                     )
                 }
                 is HistorialUiState.Error -> {
@@ -372,6 +377,15 @@ fun HistorialScreen(
                     }
                 }
             }
+        }
+
+        if (uiState is HistorialUiState.Success) {
+            ScrollToTopForLazyList(
+                listState = listState,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(20.dp)
+            )
         }
     }
 
@@ -509,9 +523,9 @@ private fun EmptyHistorialView(
 
 @Composable
 private fun HistorialList(
+    listState: LazyListState,
     registros: List<RegistroComidaConItems>,
-    onOpenDetail: (RegistroComidaConItems) -> Unit,
-    onDelete: (RegistroComidaConItems) -> Unit
+    onOpenDetail: (RegistroComidaConItems) -> Unit
 ) {
     val expandedDays = remember { mutableStateMapOf<Long, Boolean>() }
     val grouped = remember(registros) {
@@ -532,6 +546,7 @@ private fun HistorialList(
     }
 
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(
@@ -561,8 +576,7 @@ private fun HistorialList(
                 is HistorialListItem.Registro -> {
                     RegistroCard(
                         registro = item.registro,
-                        onOpenDetail = { onOpenDetail(item.registro) },
-                        onDelete = { onDelete(item.registro) }
+                        onOpenDetail = { onOpenDetail(item.registro) }
                     )
                 }
             }
@@ -615,13 +629,17 @@ private fun DayHeader(
 @Composable
 private fun RegistroCard(
     registro: RegistroComidaConItems,
-    onOpenDetail: () -> Unit,
-    onDelete: () -> Unit
+    onOpenDetail: () -> Unit
 ) {
     val origenRegistro = OrigenRegistro.fromValue(registro.registro.origenRegistro)
     val isNightscoutImport = origenRegistro == OrigenRegistro.NIGHTSCOUT_IMPORT
     val isNightscoutLinked = !registro.registro.nightscoutTreatmentId.isNullOrBlank()
     val estadoDosis = EstadoDosis.fromValue(registro.registro.dosisEstado)
+    val nightscoutState = nightscoutSyncState(
+        origenRegistro = origenRegistro,
+        isNightscoutLinked = isNightscoutLinked,
+        estadoDosis = estadoDosis
+    )
     val cardModifier = Modifier
         .fillMaxWidth()
         .clickable(onClick = onOpenDetail)
@@ -676,14 +694,7 @@ private fun RegistroCard(
                                 )
                             }
                             Spacer(modifier = Modifier.width(8.dp))
-                            IconButton(onClick = onDelete) {
-                                Icon(
-                                    imageVector = Icons.Default.Delete,
-                                    contentDescription = "Eliminar",
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.height(18.dp)
-                                )
-                            }
+                            NightscoutSyncChip(state = nightscoutState)
                         }
                     } else {
                         Row(
@@ -723,14 +734,7 @@ private fun RegistroCard(
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                                 )
                             }
-                            IconButton(onClick = onDelete) {
-                                Icon(
-                                    imageVector = Icons.Default.Delete,
-                                    contentDescription = "Eliminar",
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.height(18.dp)
-                                )
-                            }
+                            NightscoutSyncChip(state = nightscoutState)
                         }
                     }
                 } else {
@@ -759,14 +763,7 @@ private fun RegistroCard(
                             Spacer(modifier = Modifier.width(8.dp))
                             DoseStatusBadge(estado = estadoDosis)
                             Spacer(modifier = Modifier.width(8.dp))
-                            IconButton(onClick = onDelete) {
-                                Icon(
-                                    imageVector = Icons.Default.Delete,
-                                    contentDescription = "Eliminar",
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.height(18.dp)
-                                )
-                            }
+                            NightscoutSyncChip(state = nightscoutState)
                         }
                     } else {
                         Row(
@@ -796,14 +793,7 @@ private fun RegistroCard(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 DoseStatusBadge(estado = estadoDosis)
                             }
-                            IconButton(onClick = onDelete) {
-                                Icon(
-                                    imageVector = Icons.Default.Delete,
-                                    contentDescription = "Eliminar",
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.height(18.dp)
-                                )
-                            }
+                            NightscoutSyncChip(state = nightscoutState)
                         }
                     }
 
@@ -874,8 +864,6 @@ private fun RegistroCard(
                         label = "INSULINA",
                         value = "${String.format("%.1f", insulinBreakdown.total)} U",
                         color = HistorialInsulinaColor,
-                        valueIcon = if (isNightscoutLinked) Icons.Default.Link else null,
-                        valueIconTint = HistorialInsulinaColor,
                         isMain = true
                     )
                 }
@@ -913,15 +901,21 @@ private fun RegistroDetalleBottomSheet(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             val estadoDosis = EstadoDosis.fromValue(registro.registro.dosisEstado)
-            val isNightscoutImport =
-                OrigenRegistro.fromValue(registro.registro.origenRegistro) == OrigenRegistro.NIGHTSCOUT_IMPORT
+            val origenRegistro = OrigenRegistro.fromValue(registro.registro.origenRegistro)
+            val isNightscoutImport = origenRegistro == OrigenRegistro.NIGHTSCOUT_IMPORT
             val isNightscoutLinked = !registro.registro.nightscoutTreatmentId.isNullOrBlank()
+            val nightscoutState = nightscoutSyncState(
+                origenRegistro = origenRegistro,
+                isNightscoutLinked = isNightscoutLinked,
+                estadoDosis = estadoDosis
+            )
             var enlaceHora by remember {
                 mutableStateOf(DateUtils.formatTime(registro.registro.dosisConfirmadaAt ?: registro.registro.fecha))
             }
             var enlaceDosis by remember {
                 mutableStateOf(String.format(Locale.getDefault(), "%.1f", registro.registro.unidadesInsulina))
             }
+            var enlaceAjusteExpandido by remember(registro.registro.id) { mutableStateOf(false) }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -959,9 +953,7 @@ private fun RegistroDetalleBottomSheet(
                         }
                     }
                 }
-                if (isNightscoutLinked) {
-                    NightscoutLinkedBadge()
-                }
+                NightscoutSyncChip(state = nightscoutState)
 //                IconButton(onClick = onDismiss) {
 //                    Icon(
 //                        imageVector = Icons.Default.Close,
@@ -1036,14 +1028,6 @@ private fun RegistroDetalleBottomSheet(
                     text = ratioText,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            if (!registro.registro.nightscoutTreatmentId.isNullOrBlank()) {
-                Text(
-                    text = "Vinculado Nightscout",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.secondary
                 )
             }
 
@@ -1146,17 +1130,6 @@ private fun RegistroDetalleBottomSheet(
                 StatDetailRow(
                     label = "Corrección",
                     value = formatSignedUnits(insulinBreakdown.correccion)
-                )
-            }
-            val dosisRemota = registro.registro.unidadesInsulinaRemota
-            if (dosisRemota != null && kotlin.math.abs(dosisRemota - registro.registro.unidadesInsulina) >= 0.05f) {
-                StatDetailRow(
-                    label = "Dosis app",
-                    value = formatUnits(registro.registro.unidadesInsulina)
-                )
-                StatDetailRow(
-                    label = "Dosis Nightscout",
-                    value = formatUnits(dosisRemota)
                 )
             }
             registro.registro.factorContextoTotalAplicado?.let { factorAplicado ->
@@ -1300,26 +1273,6 @@ private fun RegistroDetalleBottomSheet(
 
             if (!isNightscoutImport) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Text(
-                    text = "Ajuste para enlace Nightscout",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-                OutlinedTextField(
-                    value = enlaceHora,
-                    onValueChange = { enlaceHora = it },
-                    label = { Text("Hora confirmada (HH:mm)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = enlaceDosis,
-                    onValueChange = { enlaceDosis = it },
-                    label = { Text("Dosis para enlace (U)") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth()
-                )
                 val enlaceError = remember(enlaceHora, enlaceDosis) {
                     val parts = enlaceHora.split(":")
                     if (parts.size != 2) return@remember "Formato hora HH:mm"
@@ -1327,35 +1280,104 @@ private fun RegistroDetalleBottomSheet(
                     val m = parts[1].toIntOrNull()
                     if (h == null || m == null || h !in 0..23 || m !in 0..59) "Hora inválida" else null
                 }
+                val dosisRemota = registro.registro.unidadesInsulinaRemota
+                val mostrarDiferenciaDosis = dosisRemota != null &&
+                    kotlin.math.abs(dosisRemota - registro.registro.unidadesInsulina) > 0.5f
                 val enlaceDosisValue = enlaceDosis.replace(',', '.').toFloatOrNull()
-                Button(
-                    onClick = {
-                        val parts = enlaceHora.split(":")
-                        val h = parts[0].toInt()
-                        val m = parts[1].toInt()
-                        val calendar = java.util.Calendar.getInstance().apply {
-                            timeInMillis = registro.registro.fecha
-                            set(java.util.Calendar.HOUR_OF_DAY, h)
-                            set(java.util.Calendar.MINUTE, m)
-                            set(java.util.Calendar.SECOND, 0)
-                            set(java.util.Calendar.MILLISECOND, 0)
-                        }
-                        val confirmAt = calendar.timeInMillis
-                        val units = enlaceDosisValue ?: registro.registro.unidadesInsulina
-                        onUpdateDoseForLink(units, confirmAt)
-                    },
-                    enabled = enlaceError == null && enlaceDosisValue != null,
+
+                Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
-                    Text("Guardar ajuste de enlace")
-                }
-                if (enlaceError != null || enlaceDosisValue == null) {
-                    Text(
-                        text = enlaceError ?: "Dosis inválida",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { enlaceAjusteExpandido = !enlaceAjusteExpandido }
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Ajuste para enlace Nightscout",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Icon(
+                                imageVector = if (enlaceAjusteExpandido) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = if (enlaceAjusteExpandido) "Colapsar ajuste" else "Expandir ajuste"
+                            )
+                        }
+
+                        AnimatedVisibility(visible = enlaceAjusteExpandido) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp)
+                                    .padding(bottom = 14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                if (mostrarDiferenciaDosis) {
+                                    StatDetailRow(
+                                        label = "Dosis app",
+                                        value = formatUnits(registro.registro.unidadesInsulina)
+                                    )
+                                    StatDetailRow(
+                                        label = "Dosis Nightscout",
+                                        value = formatUnits(dosisRemota!!)
+                                    )
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                }
+
+                                OutlinedTextField(
+                                    value = enlaceHora,
+                                    onValueChange = { enlaceHora = it },
+                                    label = { Text("Hora confirmada (HH:mm)") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = enlaceDosis,
+                                    onValueChange = { enlaceDosis = it },
+                                    label = { Text("Dosis para enlace (U)") },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                Button(
+                                    onClick = {
+                                        val parts = enlaceHora.split(":")
+                                        val h = parts[0].toInt()
+                                        val m = parts[1].toInt()
+                                        val calendar = java.util.Calendar.getInstance().apply {
+                                            timeInMillis = registro.registro.fecha
+                                            set(java.util.Calendar.HOUR_OF_DAY, h)
+                                            set(java.util.Calendar.MINUTE, m)
+                                            set(java.util.Calendar.SECOND, 0)
+                                            set(java.util.Calendar.MILLISECOND, 0)
+                                        }
+                                        val confirmAt = calendar.timeInMillis
+                                        val units = enlaceDosisValue ?: registro.registro.unidadesInsulina
+                                        onUpdateDoseForLink(units, confirmAt)
+                                    },
+                                    enabled = enlaceError == null && enlaceDosisValue != null,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("Guardar ajuste de enlace")
+                                }
+                                if (enlaceError != null || enlaceDosisValue == null) {
+                                    Text(
+                                        text = enlaceError ?: "Dosis inválida",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -1378,9 +1400,30 @@ private fun RegistroDetalleBottomSheet(
 }
 
 @Composable
-private fun NightscoutLinkedBadge() {
-    val color = MaterialTheme.colorScheme.secondary
+private fun NightscoutSyncChip(
+    state: NightscoutSyncState,
+    modifier: Modifier = Modifier
+) {
+    val (icon, color, description) = when (state) {
+        NightscoutSyncState.LINKED -> Triple(
+            Icons.Default.Cloud,
+            MaterialTheme.colorScheme.secondary,
+            "Registro enlazado con Nightscout"
+        )
+        NightscoutSyncState.NOT_LINKED -> Triple(
+            Icons.Default.CloudOff,
+            MaterialTheme.colorScheme.onSurfaceVariant,
+            "Registro no enlazado con Nightscout"
+        )
+        NightscoutSyncState.SERVER -> Triple(
+            Icons.Default.CloudQueue,
+            MaterialTheme.colorScheme.tertiary,
+            "Registro importado desde Nightscout"
+        )
+    }
+
     Surface(
+        modifier = modifier,
         color = color.copy(alpha = 0.14f),
         shape = RoundedCornerShape(999.dp)
     ) {
@@ -1389,8 +1432,8 @@ private fun NightscoutLinkedBadge() {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
-                imageVector = Icons.Default.Link,
-                contentDescription = null,
+                imageVector = icon,
+                contentDescription = description,
                 tint = color,
                 modifier = Modifier.size(12.dp)
             )
@@ -1402,6 +1445,25 @@ private fun NightscoutLinkedBadge() {
                 color = color
             )
         }
+    }
+}
+
+private enum class NightscoutSyncState {
+    LINKED,
+    NOT_LINKED,
+    SERVER
+}
+
+private fun nightscoutSyncState(
+    origenRegistro: OrigenRegistro,
+    isNightscoutLinked: Boolean,
+    estadoDosis: EstadoDosis
+): NightscoutSyncState {
+    return when {
+        origenRegistro == OrigenRegistro.NIGHTSCOUT_IMPORT -> NightscoutSyncState.SERVER
+        estadoDosis == EstadoDosis.OMITIDA -> NightscoutSyncState.NOT_LINKED
+        isNightscoutLinked -> NightscoutSyncState.LINKED
+        else -> NightscoutSyncState.NOT_LINKED
     }
 }
 
@@ -1926,15 +1988,18 @@ private fun calculateInsulinBreakdown(
     val totalGuardado = registro.registro.unidadesInsulina
     val hidratos = registro.registro.hidratosTotales
     val ratioHc = registro.registro.ratioInsulinaHc
+    val factorContexto = registro.registro.factorContextoTotalAplicado
+        ?.takeIf { it.isFinite() && it > 0f }
+        ?: 1f
 
-    val comidaRaw = if (ratioHc != null && ratioHc > 0f && !ratioHc.isNaN() && hidratos > 0f) {
+    val comidaBaseRaw = if (ratioHc != null && ratioHc > 0f && !ratioHc.isNaN() && hidratos > 0f) {
         hidratos * ratioHc
     } else {
-        totalGuardado
+        totalGuardado / factorContexto
     }
-    val comida = roundToHalf(comidaRaw.coerceAtLeast(0f))
+    val comida = roundToHalf((comidaBaseRaw * factorContexto).coerceAtLeast(0f))
 
-    val correccionRaw = registro.registro.unidadesCorreccionSugerida ?: (totalGuardado - comidaRaw)
+    val correccionRaw = registro.registro.unidadesCorreccionSugerida ?: ((totalGuardado / factorContexto) - comidaBaseRaw)
     val correccion = if (kotlin.math.abs(correccionRaw) < 0.05f) 0f else correccionRaw
     val totalMostrado = if (registro.registro.dosisConCorreccion == false) {
         comida

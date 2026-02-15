@@ -83,6 +83,12 @@ class PerfilViewModel(
     private val _nightscoutSyncRegistrosActivo = MutableStateFlow(false)
     val nightscoutSyncRegistrosActivo: StateFlow<Boolean> = _nightscoutSyncRegistrosActivo.asStateFlow()
 
+    private val _nightscoutLinkOffsetMinutes = MutableStateFlow("15")
+    val nightscoutLinkOffsetMinutes: StateFlow<String> = _nightscoutLinkOffsetMinutes.asStateFlow()
+
+    private val _nightscoutLinkOffsetUnits = MutableStateFlow("0.5")
+    val nightscoutLinkOffsetUnits: StateFlow<String> = _nightscoutLinkOffsetUnits.asStateFlow()
+
     private val _factorHoraMadrugada = MutableStateFlow("1.0")
     val factorHoraMadrugada: StateFlow<String> = _factorHoraMadrugada.asStateFlow()
 
@@ -173,6 +179,8 @@ class PerfilViewModel(
                     _nightscoutUrl.value = profile.nightscoutUrl ?: ""
                     _nightscoutToken.value = profile.nightscoutToken ?: ""
                     _nightscoutSyncRegistrosActivo.value = profile.nightscoutSyncRegistrosActivo
+                    _nightscoutLinkOffsetMinutes.value = profile.nightscoutLinkOffsetMinutes.toString()
+                    _nightscoutLinkOffsetUnits.value = profile.nightscoutLinkOffsetUnits.toString()
 
                     _factorHoraMadrugada.value = profile.factorHoraMadrugada.toString()
                     _factorHoraManana.value = profile.factorHoraManana.toString()
@@ -205,6 +213,8 @@ class PerfilViewModel(
                     _aplicarCorreccionPorDefecto.value = true
                     _recordatorio2hActivo.value = false
                     _nightscoutSyncRegistrosActivo.value = false
+                    _nightscoutLinkOffsetMinutes.value = "15"
+                    _nightscoutLinkOffsetUnits.value = "0.5"
                     _factorHoraMadrugada.value = "1.0"
                     _factorHoraManana.value = "1.0"
                     _factorHoraTarde.value = "1.0"
@@ -295,6 +305,18 @@ class PerfilViewModel(
         _nightscoutSyncRegistrosActivo.value = value
     }
 
+    fun updateNightscoutLinkOffsetMinutes(value: String) {
+        if (value.isEmpty() || value.matches(Regex("^\\d*$"))) {
+            _nightscoutLinkOffsetMinutes.value = value
+        }
+    }
+
+    fun updateNightscoutLinkOffsetUnits(value: String) {
+        if (isDecimalInput(value)) {
+            _nightscoutLinkOffsetUnits.value = value
+        }
+    }
+
     fun updateFactorHoraMadrugada(value: String) {
         if (isDecimalInput(value)) _factorHoraMadrugada.value = value
     }
@@ -375,6 +397,7 @@ class PerfilViewModel(
         return nombreVal.isNotEmpty() &&
             gramosVal != null && gramosVal > 0 &&
             ratioVal != null && ratioVal > 0 &&
+            validateNightscoutLinkOffsets() &&
             validateContextFactors()
     }
 
@@ -396,6 +419,8 @@ class PerfilViewModel(
                 val objetivoInsulina = parseDecimal(_objetivoInsulinaDia.value)
                 val glucosaObjetivo = _glucosaObjetivoMgdl.value.trim().toIntOrNull()
                 val factorCorreccion = parseDecimal(_factorCorreccionMgdlPorU.value)
+                val linkOffsetMinutes = _nightscoutLinkOffsetMinutes.value.trim().toIntOrNull()
+                val linkOffsetUnits = parseDecimal(_nightscoutLinkOffsetUnits.value)
 
                 val factorHoraMadrugada = parsePositiveFactor(_factorHoraMadrugada.value)
                 val factorHoraManana = parsePositiveFactor(_factorHoraManana.value)
@@ -472,6 +497,18 @@ class PerfilViewModel(
                     )
                     return@launch
                 }
+                if (linkOffsetMinutes == null || linkOffsetMinutes < 0 || linkOffsetMinutes > 180) {
+                    _uiState.value = PerfilUiState.Error(
+                        "Offset de hora para enlace Nightscout no válido (0-180 min)"
+                    )
+                    return@launch
+                }
+                if (linkOffsetUnits == null || linkOffsetUnits < 0f || linkOffsetUnits > 5f) {
+                    _uiState.value = PerfilUiState.Error(
+                        "Offset de dosis para enlace Nightscout no válido (0-5 U)"
+                    )
+                    return@launch
+                }
 
                 val profile = UsuarioProfile(
                     id = currentProfile?.id ?: 1,
@@ -489,6 +526,8 @@ class PerfilViewModel(
                     nightscoutToken = _nightscoutToken.value.trim().ifEmpty { null },
                     nightscoutSyncRegistrosActivo = _nightscoutSyncRegistrosActivo.value,
                     nightscoutSyncBackfillDoneAt = currentProfile?.nightscoutSyncBackfillDoneAt,
+                    nightscoutLinkOffsetMinutes = linkOffsetMinutes,
+                    nightscoutLinkOffsetUnits = linkOffsetUnits,
                     factorHoraMadrugada = factorHoraMadrugada!!,
                     factorHoraManana = factorHoraManana!!,
                     factorHoraTarde = factorHoraTarde!!,
@@ -555,6 +594,14 @@ class PerfilViewModel(
             _factorEjercicioIntenso.value
         )
         return factors.all { parsePositiveFactor(it) != null }
+    }
+
+    private fun validateNightscoutLinkOffsets(): Boolean {
+        val minutes = _nightscoutLinkOffsetMinutes.value.trim().toIntOrNull()
+        val units = parseDecimal(_nightscoutLinkOffsetUnits.value)
+        val minutesOk = minutes != null && minutes in 0..180
+        val unitsOk = units != null && units >= 0f && units <= 5f
+        return minutesOk && unitsOk
     }
 
     fun resetSaveSuccess() {

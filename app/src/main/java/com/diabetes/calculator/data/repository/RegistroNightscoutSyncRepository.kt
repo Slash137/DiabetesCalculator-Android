@@ -46,6 +46,9 @@ class RegistroNightscoutSyncRepository(
         )
     }
 
+    suspend fun getByRegistroId(registroId: Int): RegistroNightscoutSync? =
+        dao.getByRegistroId(registroId)
+
     suspend fun markSyncedUpload(registroId: Int, now: Long = System.currentTimeMillis()) {
         val current = dao.getByRegistroId(registroId)
         dao.upsert(

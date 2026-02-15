@@ -117,6 +117,8 @@ fun PerfilScreen(
     val nightscoutUrl by viewModel.nightscoutUrl.collectAsState()
     val nightscoutToken by viewModel.nightscoutToken.collectAsState()
     val nightscoutSyncRegistrosActivo by viewModel.nightscoutSyncRegistrosActivo.collectAsState()
+    val nightscoutLinkOffsetMinutes by viewModel.nightscoutLinkOffsetMinutes.collectAsState()
+    val nightscoutLinkOffsetUnits by viewModel.nightscoutLinkOffsetUnits.collectAsState()
     val factorHoraMadrugada by viewModel.factorHoraMadrugada.collectAsState()
     val factorHoraManana by viewModel.factorHoraManana.collectAsState()
     val factorHoraTarde by viewModel.factorHoraTarde.collectAsState()
@@ -549,6 +551,10 @@ fun PerfilScreen(
                     onNightscoutTokenChange = viewModel::updateNightscoutToken,
                     nightscoutSyncRegistrosActivo = nightscoutSyncRegistrosActivo,
                     onNightscoutSyncRegistrosActivoChange = viewModel::updateNightscoutSyncRegistrosActivo,
+                    nightscoutLinkOffsetMinutes = nightscoutLinkOffsetMinutes,
+                    nightscoutLinkOffsetUnits = nightscoutLinkOffsetUnits,
+                    onNightscoutLinkOffsetMinutesChange = viewModel::updateNightscoutLinkOffsetMinutes,
+                    onNightscoutLinkOffsetUnitsChange = viewModel::updateNightscoutLinkOffsetUnits,
                     nightscoutStatus = nightscoutStatus,
                     pendingGlucoseCount = pendingGlucoseCount,
                     pendingMaxAttempts = pendingMaxAttempts,
@@ -645,6 +651,10 @@ private fun PerfilContent(
     onNightscoutTokenChange: (String) -> Unit,
     nightscoutSyncRegistrosActivo: Boolean,
     onNightscoutSyncRegistrosActivoChange: (Boolean) -> Unit,
+    nightscoutLinkOffsetMinutes: String,
+    nightscoutLinkOffsetUnits: String,
+    onNightscoutLinkOffsetMinutesChange: (String) -> Unit,
+    onNightscoutLinkOffsetUnitsChange: (String) -> Unit,
     nightscoutStatus: NightscoutStatus,
     pendingGlucoseCount: Int,
     pendingMaxAttempts: Int,
@@ -658,6 +668,7 @@ private fun PerfilContent(
     var showDefaultsTable by remember { mutableStateOf(false) }
     var isSyncingRegistros by remember { mutableStateOf(false) }
     var syncBaseline by remember { mutableStateOf<NightscoutRegistrosSyncSummary?>(null) }
+    val scrollState = rememberScrollState()
 
     LaunchedEffect(nightscoutRegistroSyncSummary, isSyncingRegistros) {
         val baseline = syncBaseline
@@ -686,7 +697,7 @@ private fun PerfilContent(
                 .fillMaxWidth()
                 .widthIn(max = 600.dp)
                 .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(scrollState),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             AvisoMedico()
@@ -922,11 +933,12 @@ private fun PerfilContent(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(if (showContextFactorsDialog) "Ocultar configuración avanzada" else "Configurar factores")
-                    }
-                }
             }
+        }
 
-            if (showContextFactorsDialog) {
+    }
+
+    if (showContextFactorsDialog) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
@@ -1604,12 +1616,12 @@ private fun PerfilContent(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Sincronizar registros de insulina",
+                                text = "Sincronizar comidas y pinchazos",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Medium
                             )
                             Text(
-                                text = "Sube registros y reconcilia pinchazos de Nightscout/Novopen.",
+                                text = "Sube comidas de la app y reconcilia pinchazos desde Nightscout/Novopen.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1624,6 +1636,61 @@ private fun PerfilContent(
                             )
                         )
                     }
+
+                    Text(
+                        text = "Tolerancia de enlace dosis app ↔ Nightscout (coincidencia por hora y unidades).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    BoxWithConstraints {
+                        val isWide = maxWidth >= 520.dp
+                        val spacing = 10.dp
+                        val minutesField: @Composable (Modifier) -> Unit = { modifier ->
+                            OutlinedTextField(
+                                value = nightscoutLinkOffsetMinutes,
+                                onValueChange = onNightscoutLinkOffsetMinutesChange,
+                                label = { Text("Offset hora") },
+                                modifier = modifier,
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                enabled = !isSaving,
+                                shape = RoundedCornerShape(12.dp),
+                                suffix = { Text("min") }
+                            )
+                        }
+                        val unitsField: @Composable (Modifier) -> Unit = { modifier ->
+                            OutlinedTextField(
+                                value = nightscoutLinkOffsetUnits,
+                                onValueChange = onNightscoutLinkOffsetUnitsChange,
+                                label = { Text("Offset dosis") },
+                                modifier = modifier,
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                enabled = !isSaving,
+                                shape = RoundedCornerShape(12.dp),
+                                suffix = { Text("U") }
+                            )
+                        }
+                        if (isWide) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(spacing)
+                            ) {
+                                minutesField(Modifier.weight(1f))
+                                unitsField(Modifier.weight(1f))
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
+                                minutesField(Modifier.fillMaxWidth())
+                                unitsField(Modifier.fillMaxWidth())
+                            }
+                        }
+                    }
+                    Text(
+                        text = "Recomendado: 15 min y 0.5 U",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
                     if (nightscoutSyncRegistrosActivo) {
                         val lastSyncRegistrosText = nightscoutRegistroSyncSummary.lastSuccessAt?.let {
@@ -1711,6 +1778,11 @@ private fun PerfilContent(
                                 Text("Resync 30 días")
                             }
                         }
+                        Text(
+                            text = "Sincronizar sube comidas locales pendientes (sin subir dosis). Las dosis se toman de Nightscout/Novopen y se enlazan por tolerancia. Resync 30 días rehace esa reconciliación.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
 
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -1887,6 +1959,7 @@ private fun PerfilContent(
 
             Spacer(modifier = Modifier.height(16.dp))
         }
+
     }
 }
 

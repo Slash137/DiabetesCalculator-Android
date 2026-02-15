@@ -16,6 +16,7 @@ import com.diabetes.calculator.work.AutoBackupWorker
 import com.diabetes.calculator.work.NightscoutSyncWorker
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
@@ -56,20 +57,25 @@ class DiabetesApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        // Poblar base de datos si es necesario
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-            database.populateDatabase()
+        CoroutineScope(Dispatchers.IO).launch {
+            val workManager = WorkManager.getInstance(this@DiabetesApp)
+            scheduleAutoBackup(workManager)
+            NightscoutSyncWorker.enqueuePeriodic(workManager)
+
+            if (shouldPopulateSeedData()) {
+                database.populateDatabase()
+                markSeedDataPopulated()
+            }
+
             usuarioRepository.migrateTokenIfNeeded()
             val profile = usuarioRepository.getProfileSync()
             if (profile?.nightscoutSyncRegistrosActivo == true) {
-                NightscoutSyncWorker.enqueueNow(WorkManager.getInstance(this@DiabetesApp))
+                NightscoutSyncWorker.enqueueNow(workManager)
             }
         }
-        scheduleAutoBackup()
-        NightscoutSyncWorker.enqueuePeriodic(WorkManager.getInstance(this))
     }
 
-    private fun scheduleAutoBackup() {
+    private fun scheduleAutoBackup(workManager: WorkManager) {
         val constraints = Constraints.Builder()
             .setRequiresBatteryNotLow(true)
             .setRequiresStorageNotLow(true)
@@ -79,10 +85,29 @@ class DiabetesApp : Application() {
             .setConstraints(constraints)
             .build()
 
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+        workManager.enqueueUniquePeriodicWork(
             "auto_backup",
             ExistingPeriodicWorkPolicy.KEEP,
             request
         )
+    }
+
+    private fun shouldPopulateSeedData(): Boolean {
+        val prefs = getSharedPreferences(INIT_PREFS, MODE_PRIVATE)
+        val seededVersion = prefs.getInt(KEY_FOOD_SEED_VERSION, 0)
+        return seededVersion < CURRENT_FOOD_SEED_VERSION
+    }
+
+    private fun markSeedDataPopulated() {
+        getSharedPreferences(INIT_PREFS, MODE_PRIVATE)
+            .edit()
+            .putInt(KEY_FOOD_SEED_VERSION, CURRENT_FOOD_SEED_VERSION)
+            .apply()
+    }
+
+    companion object {
+        private const val INIT_PREFS = "app_init"
+        private const val KEY_FOOD_SEED_VERSION = "food_seed_version"
+        private const val CURRENT_FOOD_SEED_VERSION = 1
     }
 }

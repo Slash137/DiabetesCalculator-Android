@@ -211,7 +211,6 @@ fun NuevaComidaScreen(
                     onRemoveItem = viewModel::removeItem,
                     onUpdateItemAlimento = viewModel::updateItemAlimento,
                     onUpdateItemCantidad = viewModel::updateItemCantidad,
-                    onConvertItemLitrosToMl = viewModel::convertItemLitrosToMl,
                     onSave = viewModel::saveRegistro,
                     canSave = viewModel.canSave(),
                     onOpenPlantillas = { showPlantillasDialog = true },
@@ -346,7 +345,6 @@ private fun NuevaComidaContent(
     onRemoveItem: (ItemComidaTemporal) -> Unit,
     onUpdateItemAlimento: (ItemComidaTemporal, Alimento) -> Unit,
     onUpdateItemCantidad: (ItemComidaTemporal, String) -> Unit,
-    onConvertItemLitrosToMl: (ItemComidaTemporal) -> Unit,
     onSave: () -> Unit,
     canSave: Boolean,
     onOpenPlantillas: () -> Unit,
@@ -354,6 +352,7 @@ private fun NuevaComidaContent(
 ) {
     var showContextEditor by remember { mutableStateOf(false) }
     var showFactorBreakdown by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -364,7 +363,7 @@ private fun NuevaComidaContent(
                 .fillMaxWidth()
                 .widthIn(max = 600.dp)
                 .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(scrollState),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Text(
@@ -405,7 +404,6 @@ private fun NuevaComidaContent(
                     onSearchQueryChange = onSearchQueryChange,
                     onUpdateAlimento = { onUpdateItemAlimento(item, it) },
                     onUpdateCantidad = { onUpdateItemCantidad(item, it) },
-                    onConvertLitrosToMl = { onConvertItemLitrosToMl(item) },
                     onRemove = { onRemoveItem(item) },
                     isOnlyItem = items.size == 1,
                     enabled = !isSaving
@@ -1129,7 +1127,6 @@ private fun ItemComidaRow(
     onSearchQueryChange: (String) -> Unit,
     onUpdateAlimento: (Alimento) -> Unit,
     onUpdateCantidad: (String) -> Unit,
-    onConvertLitrosToMl: () -> Unit,
     onRemove: () -> Unit,
     isOnlyItem: Boolean,
     enabled: Boolean
@@ -1146,7 +1143,6 @@ private fun ItemComidaRow(
     } else {
         "Cantidad"
     }
-    val muestraAtajoLitros = tipoMedicion == TipoMedicionAlimento.ML
     val requiereConfigUnidad = item.alimento?.let {
         it.tipoMedicionNormalizado() == TipoMedicionAlimento.UNIDAD &&
             it.requiereEquivalenciaUnidad()
@@ -1236,14 +1232,6 @@ private fun ItemComidaRow(
                             unfocusedContainerColor = MaterialTheme.colorScheme.surface
                         )
                     )
-                    if (muestraAtajoLitros) {
-                        TextButton(
-                            onClick = onConvertLitrosToMl,
-                            enabled = enabled && item.cantidadStr.isNotBlank()
-                        ) {
-                            Text("L\u2192ml")
-                        }
-                    }
                 }
             }
 

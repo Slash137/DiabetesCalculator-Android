@@ -44,6 +44,7 @@ fun EstadisticasScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val period by viewModel.period.collectAsState()
+    val scrollState = rememberScrollState()
 
     Box(
         modifier = modifier.fillMaxSize(),
@@ -54,7 +55,7 @@ fun EstadisticasScreen(
                 .fillMaxWidth()
                 .widthIn(max = 760.dp)
                 .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(scrollState),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(

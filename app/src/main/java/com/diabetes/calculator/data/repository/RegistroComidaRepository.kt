@@ -92,14 +92,25 @@ class RegistroComidaRepository(private val dao: RegistroComidaDao) {
         unidadesInsulinaRemota: Float?,
         reconciliadoAt: Long?,
         dcid: String?
-    ) {
-        dao.updateNightscoutLink(
+    ): Int {
+        return dao.updateNightscoutLink(
             registroId = registroId,
             treatmentId = treatmentId,
             unidadesInsulinaRemota = unidadesInsulinaRemota,
             reconciliadoAt = reconciliadoAt,
             dcid = dcid
         )
+    }
+
+    suspend fun updateNightscoutSyncDcid(
+        registroId: Int,
+        dcid: String?
+    ) {
+        dao.updateNightscoutSyncDcid(registroId, dcid)
+    }
+
+    suspend fun clearNightscoutLink(registroId: Int) {
+        dao.clearNightscoutLink(registroId)
     }
 
     suspend fun updateDoseForLink(

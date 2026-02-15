@@ -216,12 +216,6 @@ fun DiabetesNavGraph(app: DiabetesApp) {
     )
     val nsState by nsViewModel.glucoseState.collectAsState()
     val nsStatus by nsViewModel.status.collectAsState()
-    val pendingGlucose by app.pendingGlucoseRepository.pending.collectAsState(initial = emptyList())
-    val nightscoutImportCount by app.registroRepository.nightscoutImportCount.collectAsState(initial = 0)
-    val registroSyncSummary by app.registroNightscoutSyncRepository.summary.collectAsState(
-        initial = NightscoutRegistrosSyncSummary()
-    )
-    val pendingMaxAttempts = pendingGlucose.maxOfOrNull { it.attempts } ?: 0
     val lifecycleOwner = LocalLifecycleOwner.current
 
     DisposableEffect(lifecycleOwner, nsViewModel) {
@@ -387,7 +381,7 @@ fun DiabetesNavGraph(app: DiabetesApp) {
                 state = pagerState,
                 pageNestedScrollConnection = pagerNestedScrollConnection,
                 userScrollEnabled = pagerUserScrollEnabled,
-                beyondBoundsPageCount = 1,
+                beyondBoundsPageCount = 0,
                 modifier = Modifier
                     .then(pagerGestureModifier)
                     .padding(innerPadding)
@@ -437,6 +431,12 @@ fun DiabetesNavGraph(app: DiabetesApp) {
                         HistorialScreen(viewModel = viewModel)
                     }
                     Screen.Perfil -> {
+                        val pendingGlucose by app.pendingGlucoseRepository.pending.collectAsState(initial = emptyList())
+                        val nightscoutImportCount by app.registroRepository.nightscoutImportCount.collectAsState(initial = 0)
+                        val registroSyncSummary by app.registroNightscoutSyncRepository.summary.collectAsState(
+                            initial = NightscoutRegistrosSyncSummary()
+                        )
+                        val pendingMaxAttempts = pendingGlucose.maxOfOrNull { it.attempts } ?: 0
                         val viewModel: PerfilViewModel = viewModel(
                             factory = PerfilViewModel.Factory(
                                 app.usuarioRepository,

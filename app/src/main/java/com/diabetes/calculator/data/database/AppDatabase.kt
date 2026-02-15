@@ -29,7 +29,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Base de datos Room principal de la aplicacion.
- * Version 17 con fallback destructivo solo en debug.
+ * Version 18 con fallback destructivo solo en debug.
  */
 @Database(
     entities = [
@@ -43,7 +43,7 @@ import kotlinx.coroutines.launch
         RegistroNightscoutSync::class,
         NightscoutTreatmentTombstone::class
     ],
-    version = 17,
+    version = 18,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -84,7 +84,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_13_14,
                     MIGRATION_14_15,
                     MIGRATION_15_16,
-                    MIGRATION_16_17
+                    MIGRATION_16_17,
+                    MIGRATION_17_18
                 )
                 if (BuildConfig.DEBUG) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -378,6 +379,17 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                 database.execSQL(
                     "UPDATE plantilla_item SET cantidad = gramos, unidad = 'g'"
+                )
+            }
+        }
+
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE usuario_profile ADD COLUMN nightscoutLinkOffsetMinutes INTEGER NOT NULL DEFAULT 15"
+                )
+                database.execSQL(
+                    "ALTER TABLE usuario_profile ADD COLUMN nightscoutLinkOffsetUnits REAL NOT NULL DEFAULT 0.5"
                 )
             }
         }
