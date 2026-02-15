@@ -1,6 +1,5 @@
 package com.diabetes.calculator.ui.screens.alimentos
 
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -572,13 +572,13 @@ private fun AlimentoEditorScreen(
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold
                 )
-                Row(
+                LazyRow(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        .fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(horizontal = 2.dp)
                 ) {
-                    TipoMedicionAlimento.all.forEach { option ->
+                    items(TipoMedicionAlimento.all.toList(), key = { it }) { option ->
                         FilterChip(
                             selected = tipoMedicion == option,
                             onClick = { viewModel.updateDialogTipoMedicion(option) },
@@ -593,13 +593,13 @@ private fun AlimentoEditorScreen(
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold
                     )
-                    Row(
+                    LazyRow(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            .fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(horizontal = 2.dp)
                     ) {
-                        EstadoFisicoAlimento.all.forEach { option ->
+                        items(EstadoFisicoAlimento.all.toList(), key = { it }) { option ->
                             FilterChip(
                                 selected = estadoFisico == option,
                                 onClick = { viewModel.updateDialogEstadoFisico(option) },
@@ -645,24 +645,29 @@ private fun AlimentoEditorScreen(
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold
                     )
-                    Row(
+                    LazyRow(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            .fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(horizontal = 2.dp)
                     ) {
-                        AlimentosViewModel.UNIDADES_RAPIDAS.forEach { unidad ->
+                        val opcionesUnidad = AlimentosViewModel.UNIDADES_RAPIDAS +
+                            AlimentosViewModel.UNIDAD_PERSONALIZADA
+                        items(opcionesUnidad, key = { it }) { unidad ->
                             FilterChip(
                                 selected = unidadPreset == unidad,
                                 onClick = { viewModel.updateDialogUnidadPreset(unidad) },
-                                label = { Text(unidad) }
+                                label = {
+                                    Text(
+                                        if (unidad == AlimentosViewModel.UNIDAD_PERSONALIZADA) {
+                                            "Personalizado"
+                                        } else {
+                                            unidad
+                                        }
+                                    )
+                                }
                             )
                         }
-                        FilterChip(
-                            selected = unidadPreset == AlimentosViewModel.UNIDAD_PERSONALIZADA,
-                            onClick = { viewModel.updateDialogUnidadPreset(AlimentosViewModel.UNIDAD_PERSONALIZADA) },
-                            label = { Text("Personalizado") }
-                        )
                     }
                     if (unidadPreset == AlimentosViewModel.UNIDAD_PERSONALIZADA) {
                         OutlinedTextField(
