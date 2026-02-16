@@ -37,12 +37,15 @@ import com.diabetes.calculator.domain.NivelEjercicio
 import com.diabetes.calculator.domain.NivelEnfermedad
 import com.diabetes.calculator.domain.NivelEstres
 import com.diabetes.calculator.domain.SeleccionContextoInsulina
+import com.diabetes.calculator.domain.ActiveInsulinSnapshot
 import com.diabetes.calculator.util.DateUtils
 import com.diabetes.calculator.util.NightscoutRetryPolicy
 import com.diabetes.calculator.work.Glucosa2hWorker
 import com.diabetes.calculator.work.NightscoutRetryWorker
 import com.diabetes.calculator.work.NightscoutSyncWorker
 import com.diabetes.calculator.work.Recordatorio2hWorker
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -51,6 +54,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
@@ -87,7 +91,10 @@ data class CalculoActual(
     val hidratosTotales: Float = 0f,
     val raciones: Float = 0f,
     val unidadesComida: Float = 0f,
+    val unidadesCorreccionBruta: Float = 0f,
     val unidadesCorreccion: Float = 0f,
+    val unidadesCorreccionReducidaPorActiva: Float = 0f,
+    val insulinaActivaActual: Float = 0f,
     val unidadesInsulina: Float = 0f,
     val unidadesInsulinaSinCorreccion: Float = 0f,
     val glucosaUsadaMgdl: Int? = null,
@@ -170,15 +177,23 @@ class NuevaComidaViewModel(
     private val _saveSuccess = MutableStateFlow(false)
     val saveSuccess: StateFlow<Boolean> = _saveSuccess.asStateFlow()
 
+    private val _activeInsulinSnapshot = MutableStateFlow(ActiveInsulinSnapshot())
+    val activeInsulinSnapshot: StateFlow<ActiveInsulinSnapshot> = _activeInsulinSnapshot.asStateFlow()
+
+    private val _activeInsulinLoading = MutableStateFlow(true)
+    val activeInsulinLoading: StateFlow<Boolean> = _activeInsulinLoading.asStateFlow()
+
     private val _uiEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val uiEvents = _uiEvents.asSharedFlow()
 
     private var cachedProfile: UsuarioProfile? = null
     private var cachedAlimentos: List<Alimento> = emptyList()
     private var contextInitialized = false
+    private var activeInsulinTickerJob: Job? = null
 
     init {
         loadData()
+        startActiveInsulinTicker()
     }
 
     private fun loadData() {
@@ -215,6 +230,29 @@ class NuevaComidaViewModel(
                     _uiState.value = NuevaComidaUiState.Ready(filtered, profile)
                 }
             }
+        }
+    }
+
+    private fun startActiveInsulinTicker() {
+        activeInsulinTickerJob?.cancel()
+        activeInsulinTickerJob = viewModelScope.launch {
+            refreshActiveInsulin()
+            while (isActive) {
+                delay(60_000L)
+                refreshActiveInsulin()
+            }
+        }
+    }
+
+    private suspend fun refreshActiveInsulin() {
+        runCatching {
+            registroRepository.getActiveInsulinSnapshot(System.currentTimeMillis())
+        }.onSuccess { snapshot ->
+            _activeInsulinSnapshot.value = snapshot
+            _activeInsulinLoading.value = false
+            recalculate()
+        }.onFailure {
+            _activeInsulinLoading.value = false
         }
     }
 
@@ -519,6 +557,7 @@ class NuevaComidaViewModel(
                 if (alertMsg != null) {
                     _uiEvents.tryEmit(alertMsg)
                 }
+                refreshActiveInsulin()
                 _saveSuccess.value = true
                 resetForm()
             } catch (e: Exception) {
@@ -544,7 +583,16 @@ class NuevaComidaViewModel(
         } else {
             0f
         }
-        val unidadesCorreccion = calculateCorrectionUnits(profile, glucosaMgdl)
+        val unidadesCorreccionBruta = calculateCorrectionUnits(profile, glucosaMgdl)
+        val insulinaActiva = _activeInsulinSnapshot.value.totalUnits
+            .takeIf { it.isFinite() && it > 0f }
+            ?: 0f
+        val reduccionPorActiva = if (unidadesCorreccionBruta > 0f) {
+            kotlin.math.min(unidadesCorreccionBruta, insulinaActiva)
+        } else {
+            0f
+        }
+        val unidadesCorreccion = unidadesCorreccionBruta - reduccionPorActiva
         val contexto = FactoresContextoInsulina.resolve(profile, currentSelection(profile))
         val dosisContextual = FactoresContextoInsulina.applyFactorToDoses(
             unidadesComida = unidadesComida,
@@ -556,7 +604,10 @@ class NuevaComidaViewModel(
             hidratosTotales = totalHidratos,
             raciones = raciones,
             unidadesComida = unidadesComida,
+            unidadesCorreccionBruta = unidadesCorreccionBruta,
             unidadesCorreccion = unidadesCorreccion,
+            unidadesCorreccionReducidaPorActiva = reduccionPorActiva,
+            insulinaActivaActual = insulinaActiva,
             unidadesInsulina = dosisContextual.totalConCorreccion,
             unidadesInsulinaSinCorreccion = dosisContextual.totalSinCorreccion,
             glucosaUsadaMgdl = glucosaMgdl,
@@ -802,6 +853,11 @@ class NuevaComidaViewModel(
         val maxAttempts = pending.maxOfOrNull { it.attempts } ?: 0
         val delayMinutes = NightscoutRetryPolicy.nextDelayMinutes(maxAttempts)
         NightscoutRetryWorker.enqueue(workManager, delayMinutes)
+    }
+
+    override fun onCleared() {
+        activeInsulinTickerJob?.cancel()
+        super.onCleared()
     }
 
     class Factory(

@@ -47,6 +47,24 @@ interface RegistroComidaDao {
 
     @Query("SELECT * FROM registro_comida WHERE fecha BETWEEN :from AND :to ORDER BY fecha ASC")
     suspend fun getRegistrosInRangeRaw(from: Long, to: Long): List<RegistroComida>
+
+    @Query(
+        """
+        SELECT *
+        FROM registro_comida
+        WHERE dosisEstado = 'applied'
+          AND (
+                origenRegistro = 'NIGHTSCOUT_IMPORT'
+                OR (nightscoutTreatmentId IS NOT NULL AND nightscoutTreatmentId != '')
+          )
+          AND COALESCE(dosisConfirmadaAt, fecha) BETWEEN :fromMillis AND :toMillis
+        ORDER BY COALESCE(dosisConfirmadaAt, fecha) DESC
+        """
+    )
+    suspend fun getReliableAppliedDosesInWindow(
+        fromMillis: Long,
+        toMillis: Long
+    ): List<RegistroComida>
     
     @Insert
     suspend fun insertRegistro(registro: RegistroComida): Long

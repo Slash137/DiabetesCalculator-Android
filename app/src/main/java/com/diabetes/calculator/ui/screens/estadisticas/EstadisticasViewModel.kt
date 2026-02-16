@@ -165,7 +165,11 @@ class EstadisticasViewModel(
             }.collectLatest { (period, registros, profile) ->
                 runCatching {
                     val filtered = applyPeriod(registros, period)
-                    if (filtered.isEmpty()) {
+                    val nightscoutUrl = profile?.nightscoutUrl
+                    val nightscoutToken = profile?.nightscoutToken
+                    val nightscoutConfigured = !nightscoutUrl.isNullOrBlank()
+
+                    if (filtered.isEmpty() && !nightscoutConfigured) {
                         _uiState.value = EstadisticasUiState.Empty(period)
                         return@runCatching
                     }
@@ -173,17 +177,16 @@ class EstadisticasViewModel(
                     val ratioConfigurado = profile?.ratioInsulina
                     val localResumen = buildResumen(
                         registros = filtered,
+                        trendSourceRegistros = registros,
                         period = period,
                         ratioConfiguradoURacion = ratioConfigurado,
-                        nightscoutConfigured = !profile?.nightscoutUrl.isNullOrBlank(),
+                        nightscoutConfigured = nightscoutConfigured,
                         nightscoutLoading = false,
                         nightscoutStats = null,
                         nightscoutError = null
                     )
 
-                    val nightscoutUrl = profile?.nightscoutUrl
-                    val nightscoutToken = profile?.nightscoutToken
-                    if (nightscoutUrl.isNullOrBlank()) {
+                    if (!nightscoutConfigured) {
                         _uiState.value = EstadisticasUiState.Success(period, localResumen)
                         return@runCatching
                     }
@@ -195,10 +198,14 @@ class EstadisticasViewModel(
 
                     val (from, to) = resolveNightscoutRange(period, filtered)
                     val nsStats = fetchNightscoutStats(
-                        baseUrl = nightscoutUrl,
+                        baseUrl = nightscoutUrl.orEmpty(),
                         token = nightscoutToken,
                         from = from,
                         to = to
+                    )
+                    val nsTrend = fetchNightscoutTrend(
+                        baseUrl = nightscoutUrl.orEmpty(),
+                        token = nightscoutToken
                     )
 
                     _uiState.value = EstadisticasUiState.Success(
@@ -206,7 +213,11 @@ class EstadisticasViewModel(
                         resumen = localResumen.copy(
                             nightscoutLoading = false,
                             nightscoutStats = nsStats.stat,
-                            nightscoutError = nsStats.error
+                            nightscoutError = nsStats.error,
+                            tendenciaHidratosPct = localResumen.tendenciaHidratosPct ?: nsTrend?.hidratosPct,
+                            tendenciaInsulinaPct = localResumen.tendenciaInsulinaPct ?: nsTrend?.insulinaPct,
+                            tendenciaRatioUGPct = localResumen.tendenciaRatioUGPct ?: nsTrend?.ratioUGPct,
+                            tendenciaDelta2hPct = localResumen.tendenciaDelta2hPct ?: nsTrend?.delta2hPct
                         )
                     )
                 }.onFailure { error ->
@@ -232,6 +243,7 @@ class EstadisticasViewModel(
 
     private fun buildResumen(
         registros: List<RegistroComidaConItems>,
+        trendSourceRegistros: List<RegistroComidaConItems>,
         period: StatsPeriod,
         ratioConfiguradoURacion: Float?,
         nightscoutConfigured: Boolean,
@@ -329,7 +341,10 @@ class EstadisticasViewModel(
         val topAlimentos = buildTopAlimentos(mealRegistros)
         val alimentosConMayorDelta = buildAlimentosConMayorDelta(mealRegistros)
         val similarMeals = buildSimilarMeals(mealRegistros)
-        val trend = buildTrends(mealRegistros)
+        val trendSourceMeals = trendSourceRegistros.filter {
+            OrigenRegistro.fromValue(it.registro.origenRegistro) != OrigenRegistro.NIGHTSCOUT_IMPORT
+        }
+        val trend = buildTrends(trendSourceMeals)
 
         return EstadisticasResumen(
             totalRegistros = totalRegistros,
@@ -632,6 +647,73 @@ class EstadisticasViewModel(
             DateUtils.getStartOfDay(earliest)
         }
         return start to end
+    }
+
+    private suspend fun fetchNightscoutTrend(
+        baseUrl: String,
+        token: String?
+    ): TrendResult? {
+        val dayMs = 24 * 60 * 60 * 1000L
+        val startCurrent = DateUtils.getStartOfToday() - (6 * dayMs)
+        val endCurrent = DateUtils.getEndOfToday()
+        val startPrevious = startCurrent - (7 * dayMs)
+        val endPrevious = startCurrent - 1
+
+        val treatments = withTimeoutOrNull(15_000L) {
+            nightscoutRepository.getTreatmentsInRangeAll(
+                baseUrl = baseUrl,
+                token = token,
+                fromMillis = startPrevious,
+                toMillis = endCurrent,
+                pageSize = 400,
+                maxEntries = 12000
+            )
+        } ?: return null
+
+        data class Aggregate(
+            var count: Int = 0,
+            var hidratos: Float = 0f,
+            var insulina: Float = 0f
+        )
+
+        val current = Aggregate()
+        val previous = Aggregate()
+        treatments.forEach { treatment ->
+            val timestamp = nightscoutRepository.resolveTreatmentMillis(treatment) ?: return@forEach
+            val insulin = nightscoutRepository.resolveTreatmentInsulinUnits(treatment)
+                ?.takeIf { it.isFinite() && !it.isNaN() && it > 0f }
+                ?: 0f
+            val carbs = treatment.carbs
+                ?.takeIf { it.isFinite() && !it.isNaN() && it >= 0f }
+                ?: 0f
+            if (insulin <= 0f && carbs <= 0f) return@forEach
+
+            when (timestamp) {
+                in startCurrent..endCurrent -> {
+                    current.count += 1
+                    current.hidratos += carbs
+                    current.insulina += insulin
+                }
+
+                in startPrevious..endPrevious -> {
+                    previous.count += 1
+                    previous.hidratos += carbs
+                    previous.insulina += insulin
+                }
+            }
+        }
+
+        if (current.count == 0 || previous.count == 0) return null
+
+        val currentRatioUG = if (current.hidratos > 0f) current.insulina / current.hidratos else 0f
+        val previousRatioUG = if (previous.hidratos > 0f) previous.insulina / previous.hidratos else 0f
+
+        return TrendResult(
+            hidratosPct = percentChange(current.hidratos, previous.hidratos),
+            insulinaPct = percentChange(current.insulina, previous.insulina),
+            ratioUGPct = percentChange(currentRatioUG, previousRatioUG),
+            delta2hPct = null
+        )
     }
 
     private suspend fun fetchNightscoutStats(

@@ -34,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -48,8 +49,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.work.WorkManager
 import com.diabetes.calculator.data.dao.RegistroComidaConItems
+import com.diabetes.calculator.data.entity.RegistroComida
 import com.diabetes.calculator.data.entity.EstadoDosis
 import com.diabetes.calculator.data.entity.OrigenRegistro
+import com.diabetes.calculator.domain.ACTIVE_INSULIN_DURATION_MINUTES
 import com.diabetes.calculator.domain.FactoresContextoInsulina
 import com.diabetes.calculator.domain.FaseCicloHormonal
 import com.diabetes.calculator.domain.FranjaHoraria
@@ -59,12 +62,14 @@ import com.diabetes.calculator.domain.NivelEstres
 import com.diabetes.calculator.util.DateUtils
 import com.diabetes.calculator.ui.components.ScrollToTopForLazyList
 import com.diabetes.calculator.work.NightscoutSyncWorker
+import kotlinx.coroutines.delay
 import java.util.Locale
 
 private val HistorialHidratosColor = Color(0xFF4CAF50)
 private val HistorialInsulinaColor = Color(0xFFF57C00)
 private val HistorialRacionesColor = Color(0xFF2196F3)
 private val HistorialWarningColor = Color(0xFFFF9800)
+private const val ACTIVE_INSULIN_WINDOW_MILLIS = ACTIVE_INSULIN_DURATION_MINUTES * 60_000L
 
 @Composable
 private fun HistorialMedicalNotice(modifier: Modifier = Modifier) {
@@ -114,10 +119,23 @@ fun HistorialScreen(
     var detailRegistro by remember { mutableStateOf<RegistroComidaConItems?>(null) }
     var plantillaRegistro by remember { mutableStateOf<RegistroComidaConItems?>(null) }
     var plantillaNombre by remember { mutableStateOf("") }
-    var glucosaAjustadaAntes by remember { mutableStateOf<Int?>(null) }
-    var glucosaAjustadaDespues by remember { mutableStateOf<Int?>(null) }
-    var cargandoGlucosaAjustada by remember { mutableStateOf(false) }
+    var cargandoGlucosaRetroactiva by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    val nowMillis by rememberCurrentTimeTicker()
+    val successRegistros = (uiState as? HistorialUiState.Success)?.registros.orEmpty()
+    val activeInsulinStatesByRegistroId = remember(uiState, nowMillis) {
+        successRegistros.associate { registro ->
+            registro.registro.id to activeInsulinCardStateNow(
+                registro = registro.registro,
+                nowMillis = nowMillis
+            )
+        }
+    }
+    val activeDoseCount = remember(activeInsulinStatesByRegistroId) {
+        activeInsulinStatesByRegistroId.values.count { it != null }
+    }
+    val detailActiveInsulinState = detailRegistro
+        ?.let { activeInsulinStatesByRegistroId[it.registro.id] }
 
     val onUpdateDoseStatus: (RegistroComidaConItems, EstadoDosis) -> Unit = { registro, nuevoEstado ->
         val anterior = EstadoDosis.fromValue(registro.registro.dosisEstado)
@@ -176,26 +194,21 @@ fun HistorialScreen(
 
     LaunchedEffect(
         detailRegistro?.registro?.id,
-        detailRegistro?.registro?.dosisConfirmadaAt,
         detailRegistro?.registro?.origenRegistro
     ) {
         val current = detailRegistro
         if (current == null) {
-            glucosaAjustadaAntes = null
-            glucosaAjustadaDespues = null
-            cargandoGlucosaAjustada = false
+            cargandoGlucosaRetroactiva = false
             return@LaunchedEffect
         }
         val isNightscoutImport =
             OrigenRegistro.fromValue(current.registro.origenRegistro) == OrigenRegistro.NIGHTSCOUT_IMPORT
         if (isNightscoutImport) {
             if (current.registro.glucosaAntesMgdl != null && current.registro.glucosaDespues2hMgdl != null) {
-                glucosaAjustadaAntes = null
-                glucosaAjustadaDespues = null
-                cargandoGlucosaAjustada = false
+                cargandoGlucosaRetroactiva = false
                 return@LaunchedEffect
             }
-            cargandoGlucosaAjustada = true
+            cargandoGlucosaRetroactiva = true
             val (antes, despues) = viewModel.hydrateNightscoutImportGlucose(current)
             val latest = detailRegistro
             if (latest?.registro?.id == current.registro.id) {
@@ -206,25 +219,11 @@ fun HistorialScreen(
                     )
                 )
             }
-            glucosaAjustadaAntes = null
-            glucosaAjustadaDespues = null
-            cargandoGlucosaAjustada = false
+            cargandoGlucosaRetroactiva = false
             return@LaunchedEffect
         }
 
-        val confirmadaAt = current.registro.dosisConfirmadaAt
-        if (confirmadaAt == null) {
-            glucosaAjustadaAntes = null
-            glucosaAjustadaDespues = null
-            cargandoGlucosaAjustada = false
-            return@LaunchedEffect
-        }
-
-        cargandoGlucosaAjustada = true
-        val (antes, despues) = viewModel.getAdjustedGlucoseForTimes(confirmadaAt)
-        glucosaAjustadaAntes = antes
-        glucosaAjustadaDespues = despues
-        cargandoGlucosaAjustada = false
+        cargandoGlucosaRetroactiva = false
     }
 
     Box(
@@ -362,6 +361,8 @@ fun HistorialScreen(
                     HistorialList(
                         listState = listState,
                         registros = state.registros,
+                        activeInsulinStatesByRegistroId = activeInsulinStatesByRegistroId,
+                        activeDoseCount = activeDoseCount,
                         onOpenDetail = { detailRegistro = it }
                     )
                 }
@@ -439,14 +440,14 @@ fun HistorialScreen(
                 val current = detailRegistro ?: return@RegistroDetalleBottomSheet
                 onUpdateDoseCorrection(current, conCorreccion)
             },
-            onUpdateDoseForLink = { unidades, confirmadaAt ->
-                val current = detailRegistro ?: return@RegistroDetalleBottomSheet
-                onUpdateDoseForLink(current, unidades, confirmadaAt)
-            },
-            glucosaAjustadaAntes = glucosaAjustadaAntes,
-            glucosaAjustadaDespues = glucosaAjustadaDespues,
-            cargandoGlucosaAjustada = cargandoGlucosaAjustada
-        )
+                onUpdateDoseForLink = { unidades, confirmadaAt ->
+                    val current = detailRegistro ?: return@RegistroDetalleBottomSheet
+                    onUpdateDoseForLink(current, unidades, confirmadaAt)
+                },
+                activeInsulinState = detailActiveInsulinState,
+                activeDoseCount = activeDoseCount,
+                cargandoGlucosaRetroactiva = cargandoGlucosaRetroactiva
+            )
     }
 
     if (plantillaRegistro != null) {
@@ -525,6 +526,8 @@ private fun EmptyHistorialView(
 private fun HistorialList(
     listState: LazyListState,
     registros: List<RegistroComidaConItems>,
+    activeInsulinStatesByRegistroId: Map<Int, ActiveInsulinCardState?>,
+    activeDoseCount: Int,
     onOpenDetail: (RegistroComidaConItems) -> Unit
 ) {
     val expandedDays = remember { mutableStateMapOf<Long, Boolean>() }
@@ -544,7 +547,6 @@ private fun HistorialList(
             }
         }
     }
-
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
@@ -574,8 +576,11 @@ private fun HistorialList(
                     )
                 }
                 is HistorialListItem.Registro -> {
+                    val activeInsulinState = activeInsulinStatesByRegistroId[item.registro.registro.id]
                     RegistroCard(
                         registro = item.registro,
+                        activeInsulinState = activeInsulinState,
+                        activeDoseCount = activeDoseCount,
                         onOpenDetail = { onOpenDetail(item.registro) }
                     )
                 }
@@ -629,31 +634,68 @@ private fun DayHeader(
 @Composable
 private fun RegistroCard(
     registro: RegistroComidaConItems,
+    activeInsulinState: ActiveInsulinCardState?,
+    activeDoseCount: Int,
     onOpenDetail: () -> Unit
 ) {
     val origenRegistro = OrigenRegistro.fromValue(registro.registro.origenRegistro)
     val isNightscoutImport = origenRegistro == OrigenRegistro.NIGHTSCOUT_IMPORT
     val isNightscoutLinked = !registro.registro.nightscoutTreatmentId.isNullOrBlank()
     val estadoDosis = EstadoDosis.fromValue(registro.registro.dosisEstado)
+    val insulinBreakdown = calculateInsulinBreakdown(registro)
+    val activeIntensity = activeInsulinState?.intensity?.coerceIn(0f, 1f) ?: 0f
+    val hasActiveInsulin = activeInsulinState != null
     val nightscoutState = nightscoutSyncState(
         origenRegistro = origenRegistro,
         isNightscoutLinked = isNightscoutLinked,
         estadoDosis = estadoDosis
     )
+    val baseCardColor = MaterialTheme.colorScheme.surfaceContainerLow
+    val highlightedCardColor = lerp(
+        start = baseCardColor,
+        stop = MaterialTheme.colorScheme.primaryContainer,
+        fraction = 0.14f + (0.24f * activeIntensity)
+    )
+    val activeCardInnerSurface = lerp(
+        start = highlightedCardColor,
+        stop = MaterialTheme.colorScheme.surface,
+        fraction = 0.12f
+    )
+    val activeChipLabelColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.88f)
+    val activeHidratosValueColor = lerp(HistorialHidratosColor, MaterialTheme.colorScheme.onSurface, 0.34f)
+    val activeRacionesValueColor = lerp(HistorialRacionesColor, MaterialTheme.colorScheme.onSurface, 0.34f)
+    val activeInsulinaValueColor = lerp(HistorialInsulinaColor, MaterialTheme.colorScheme.onSurface, 0.34f)
     val cardModifier = Modifier
         .fillMaxWidth()
         .clickable(onClick = onOpenDetail)
     Card(
         modifier = cardModifier,
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+            containerColor = if (hasActiveInsulin) {
+                highlightedCardColor
+            } else {
+                baseCardColor
+            }
         ),
+        border = if (hasActiveInsulin) {
+            BorderStroke(
+                1.25.dp,
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.14f + (0.18f * activeIntensity))
+            )
+        } else {
+            null
+        },
         shape = RoundedCornerShape(16.dp)
     ) {
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp)
+                .padding(
+                    start = 16.dp,
+                    end = 16.dp,
+                    top = 12.dp,
+                    bottom = if (hasActiveInsulin) 12.dp else 16.dp
+                )
         ) {
             val isCompactWidth = maxWidth <= 360.dp
 
@@ -738,7 +780,6 @@ private fun RegistroCard(
                         }
                     }
                 } else {
-                    val insulinBreakdown = calculateInsulinBreakdown(registro)
                     if (isCompactWidth) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -796,6 +837,7 @@ private fun RegistroCard(
                             NightscoutSyncChip(state = nightscoutState)
                         }
                     }
+                }
 
                 if (registro.items.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -828,7 +870,13 @@ private fun RegistroCard(
 
                 if (!registro.registro.notas.isNullOrBlank()) {
                     Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (hasActiveInsulin) {
+                                activeCardInnerSurface
+                            } else {
+                                MaterialTheme.colorScheme.surface
+                            }
+                        ),
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -841,34 +889,58 @@ private fun RegistroCard(
                     }
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    DataChip(
-                        modifier = Modifier.weight(1f),
-                        label = "HIDRATOS",
-                        value = "${String.format("%.1f", registro.registro.hidratosTotales)}g",
-                        color = HistorialHidratosColor,
-                        isMain = true
-                    )
-                    DataChip(
-                        modifier = Modifier.weight(1f),
-                        label = "RACIONES",
-                        value = String.format("%.1f", registro.registro.racionesCalculadas),
-                        color = HistorialRacionesColor,
-                        isMain = true
-                    )
-                    DataChip(
-                        modifier = Modifier.weight(1.2f),
-                        label = "INSULINA",
-                        value = "${String.format("%.1f", insulinBreakdown.total)} U",
-                        color = HistorialInsulinaColor,
-                        isMain = true
-                    )
+                if (!isNightscoutImport) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        DataChip(
+                            modifier = Modifier.weight(1f),
+                            label = "HIDRATOS",
+                            value = "${String.format("%.1f", registro.registro.hidratosTotales)}g",
+                            color = HistorialHidratosColor,
+                            containerColorOverride = if (hasActiveInsulin) activeCardInnerSurface else null,
+                            labelColorOverride = if (hasActiveInsulin) activeChipLabelColor else null,
+                            valueColorOverride = if (hasActiveInsulin) activeHidratosValueColor else null,
+                            isMain = true
+                        )
+                        DataChip(
+                            modifier = Modifier.weight(1f),
+                            label = "RACIONES",
+                            value = String.format("%.1f", registro.registro.racionesCalculadas),
+                            color = HistorialRacionesColor,
+                            containerColorOverride = if (hasActiveInsulin) activeCardInnerSurface else null,
+                            labelColorOverride = if (hasActiveInsulin) activeChipLabelColor else null,
+                            valueColorOverride = if (hasActiveInsulin) activeRacionesValueColor else null,
+                            isMain = true
+                        )
+                        DataChip(
+                            modifier = Modifier.weight(1.2f),
+                            label = "INSULINA",
+                            value = "${String.format("%.1f", insulinBreakdown.total)} U",
+                            color = HistorialInsulinaColor,
+                            containerColorOverride = if (hasActiveInsulin) activeCardInnerSurface else null,
+                            labelColorOverride = if (hasActiveInsulin) activeChipLabelColor else null,
+                            valueColorOverride = if (hasActiveInsulin) activeInsulinaValueColor else null,
+                            isMain = true
+                        )
+                    }
+                }
+
+                if (hasActiveInsulin) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        ActiveInsulinSourceChip(
+                            activeUnits = activeInsulinState!!.activeUnits,
+                            doseCount = activeDoseCount,
+                            minutesRemaining = activeInsulinState.minutesRemaining,
+                            intensity = activeIntensity
+                        )
+                    }
                 }
             }
-        }
         }
     }
 }
@@ -884,9 +956,9 @@ private fun RegistroDetalleBottomSheet(
     onUpdateDoseStatus: (EstadoDosis) -> Unit,
     onUpdateDoseCorrection: (Boolean?) -> Unit,
     onUpdateDoseForLink: (Float, Long?) -> Unit,
-    glucosaAjustadaAntes: Int? = null,
-    glucosaAjustadaDespues: Int? = null,
-    cargandoGlucosaAjustada: Boolean = false
+    activeInsulinState: ActiveInsulinCardState?,
+    activeDoseCount: Int,
+    cargandoGlucosaRetroactiva: Boolean = false
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -979,7 +1051,7 @@ private fun RegistroDetalleBottomSheet(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
-                if (cargandoGlucosaAjustada) {
+                if (cargandoGlucosaRetroactiva) {
                     Text(
                         text = "Buscando glucosa retroactiva...",
                         style = MaterialTheme.typography.bodySmall,
@@ -1112,6 +1184,22 @@ private fun RegistroDetalleBottomSheet(
                 )
             }
 
+            if (activeInsulinState != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 0.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    ActiveInsulinSourceChip(
+                        activeUnits = activeInsulinState.activeUnits,
+                        doseCount = activeDoseCount,
+                        minutesRemaining = activeInsulinState.minutesRemaining,
+                        intensity = activeInsulinState.intensity
+                    )
+                }
+            }
+
             Text(
                 text = "Desglose de insulina",
                 style = MaterialTheme.typography.titleSmall,
@@ -1150,26 +1238,31 @@ private fun RegistroDetalleBottomSheet(
                     value = capText
                 )
             }
-            if (!isNightscoutImport && estadoDosis == EstadoDosis.APLICADA) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Insulina total",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    DoseCorrectionSelector(
-                        conCorreccion = registro.registro.dosisConCorreccion,
-                        onSelection = onUpdateDoseCorrection
-                    )
-                }
-            }
 
             if (!isNightscoutImport) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (estadoDosis == EstadoDosis.APLICADA) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Insulina total",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            DoseCorrectionSelector(
+                                conCorreccion = registro.registro.dosisConCorreccion,
+                                onSelection = onUpdateDoseCorrection
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(11.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                }
 
                 Text(
                     text = "Alimentos",
@@ -1217,43 +1310,20 @@ private fun RegistroDetalleBottomSheet(
 
             val glucosaAntes = registro.registro.glucosaAntesMgdl
             val glucosaDespues = registro.registro.glucosaDespues2hMgdl
-            if (glucosaAntes != null || glucosaDespues != null || glucosaAjustadaAntes != null || glucosaAjustadaDespues != null) {
+            if (glucosaAntes != null || glucosaDespues != null) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Text(
                     text = "Glucosa",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
-                if (cargandoGlucosaAjustada) {
-                    Text(
-                        text = "Actualizando valores por hora ajustada...",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                val antesBase = glucosaAntes?.let { "$it mg/dL" } ?: "—"
-                val antesValor = glucosaAjustadaAntes?.let { ajustada ->
-                    if (glucosaAntes == ajustada) {
-                        antesBase
-                    } else {
-                        "$antesBase ($ajustada mg/dL)"
-                    }
-                } ?: antesBase
                 StatDetailRow(
                     label = "Antes",
-                    value = antesValor
+                    value = glucosaAntes?.let { "$it mg/dL" } ?: "—"
                 )
-                val despuesBase = glucosaDespues?.let { "$it mg/dL" } ?: "Pendiente"
-                val despuesValor = glucosaAjustadaDespues?.let { ajustada ->
-                    if (glucosaDespues == ajustada) {
-                        despuesBase
-                    } else {
-                        "$despuesBase ($ajustada mg/dL)"
-                    }
-                } ?: despuesBase
                 StatDetailRow(
                     label = "2h después",
-                    value = despuesValor
+                    value = glucosaDespues?.let { "$it mg/dL" } ?: "Pendiente"
                 )
             }
 
@@ -1441,10 +1511,93 @@ private fun NightscoutSyncChip(
     }
 }
 
+@Composable
+private fun ActiveInsulinSourceChip(
+    activeUnits: Float,
+    doseCount: Int,
+    minutesRemaining: Int,
+    intensity: Float,
+    modifier: Modifier = Modifier
+) {
+    val color = MaterialTheme.colorScheme.primary
+    val normalized = intensity.coerceIn(0f, 1f)
+    Surface(
+        modifier = modifier,
+        color = color.copy(alpha = 0.10f + (0.16f * normalized)),
+        shape = RoundedCornerShape(999.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Bolt,
+                contentDescription = "Aporta insulina activa",
+                tint = color,
+                modifier = Modifier.size(12.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "${String.format(Locale.getDefault(), "%.1f", activeUnits)} U activas · $doseCount dosis · ${minutesRemaining} min restantes",
+                style = MaterialTheme.typography.labelMedium,
+                color = color,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+@Composable
+private fun rememberCurrentTimeTicker(
+    refreshMs: Long = 60_000L
+): State<Long> {
+    return produceState(initialValue = System.currentTimeMillis()) {
+        while (true) {
+            delay(refreshMs)
+            value = System.currentTimeMillis()
+        }
+    }
+}
+
 private enum class NightscoutSyncState {
     LINKED,
     NOT_LINKED,
     SERVER
+}
+
+private data class ActiveInsulinCardState(
+    val activeUnits: Float,
+    val intensity: Float,
+    val minutesRemaining: Int
+)
+
+private fun activeInsulinCardStateNow(
+    registro: RegistroComida,
+    nowMillis: Long
+): ActiveInsulinCardState? {
+    if (EstadoDosis.fromValue(registro.dosisEstado) != EstadoDosis.APLICADA) return null
+    val reliable = OrigenRegistro.fromValue(registro.origenRegistro) == OrigenRegistro.NIGHTSCOUT_IMPORT ||
+        !registro.nightscoutTreatmentId.isNullOrBlank()
+    if (!reliable) return null
+
+    val units = registro.unidadesInsulina
+    if (!units.isFinite() || units <= 0f) return null
+
+    val eventTime = registro.dosisConfirmadaAt ?: registro.fecha
+    val elapsed = nowMillis - eventTime
+    if (elapsed <= 0L || elapsed >= ACTIVE_INSULIN_WINDOW_MILLIS) return null
+
+    val remainingMillis = (ACTIVE_INSULIN_WINDOW_MILLIS - elapsed).coerceAtLeast(0L)
+    val intensity = (remainingMillis.toFloat() / ACTIVE_INSULIN_WINDOW_MILLIS.toFloat())
+        .coerceIn(0f, 1f)
+    val activeUnits = units * intensity
+    val minutesRemaining = ((remainingMillis + 59_999L) / 60_000L).toInt().coerceAtLeast(1)
+
+    return ActiveInsulinCardState(
+        activeUnits = activeUnits,
+        intensity = intensity,
+        minutesRemaining = minutesRemaining
+    )
 }
 
 private fun nightscoutSyncState(
@@ -1673,6 +1826,9 @@ private fun DataChip(
     color: androidx.compose.ui.graphics.Color,
     valueIcon: ImageVector? = null,
     valueIconTint: Color? = null,
+    containerColorOverride: Color? = null,
+    labelColorOverride: Color? = null,
+    valueColorOverride: Color? = null,
     isMain: Boolean = false
 ) {
     val density = LocalDensity.current
@@ -1682,7 +1838,11 @@ private fun DataChip(
     Card(
         modifier = modifier,
         colors = CardDefaults.cardColors(
-            containerColor = if (isMain) color.copy(alpha = 0.1f) else MaterialTheme.colorScheme.surface
+            containerColor = containerColorOverride ?: if (isMain) {
+                color.copy(alpha = 0.1f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
         ),
         shape = RoundedCornerShape(12.dp)
     ) {
@@ -1693,7 +1853,7 @@ private fun DataChip(
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = labelColorOverride ?: MaterialTheme.colorScheme.outline,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -1710,7 +1870,7 @@ private fun DataChip(
                     text = value,
                     style = if (isMain) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.Bold,
-                    color = if (isMain) color else MaterialTheme.colorScheme.onSurface,
+                    color = valueColorOverride ?: if (isMain) color else MaterialTheme.colorScheme.onSurface,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth(),
                     onTextLayout = { layoutResult ->
@@ -1721,7 +1881,7 @@ private fun DataChip(
                     Icon(
                         imageVector = valueIcon,
                         contentDescription = null,
-                        tint = valueIconTint ?: if (isMain) color else MaterialTheme.colorScheme.onSurface,
+                        tint = valueIconTint ?: valueColorOverride ?: if (isMain) color else MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier
                             .align(Alignment.CenterStart)
                             .offset(x = iconOffsetFromStart)

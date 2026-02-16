@@ -114,7 +114,7 @@ class HistorialViewModel(
             }
         }
     }
-    
+
     fun updateSearchQuery(query: String) {
         _searchQuery.value = query
     }
@@ -287,7 +287,7 @@ class HistorialViewModel(
         val target = filter.value ?: return list
         return list.filter { EstadoDosis.fromValue(it.registro.dosisEstado) == target }
     }
-    
+
     class Factory(
         private val repository: RegistroComidaRepository,
         private val plantillaRepository: PlantillaRepository,

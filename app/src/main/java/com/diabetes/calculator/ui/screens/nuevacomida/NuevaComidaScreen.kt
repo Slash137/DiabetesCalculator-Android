@@ -87,6 +87,8 @@ import com.diabetes.calculator.domain.FranjaHoraria
 import com.diabetes.calculator.domain.NivelEjercicio
 import com.diabetes.calculator.domain.NivelEnfermedad
 import com.diabetes.calculator.domain.NivelEstres
+import com.diabetes.calculator.domain.ActiveInsulinSnapshot
+import com.diabetes.calculator.ui.components.ActiveInsulinIndicatorCard
 import com.diabetes.calculator.ui.components.AvisoMedico
 import com.diabetes.calculator.ui.theme.HidratosColor
 import com.diabetes.calculator.ui.theme.InsulinaColor
@@ -117,6 +119,8 @@ fun NuevaComidaScreen(
     val searchQuery by viewModel.searchQuery.collectAsState()
     val plantillas by viewModel.plantillas.collectAsState()
     val notas by viewModel.notas.collectAsState()
+    val activeInsulinSnapshot by viewModel.activeInsulinSnapshot.collectAsState()
+    val activeInsulinLoading by viewModel.activeInsulinLoading.collectAsState()
     val dosisConCorreccion by viewModel.dosisConCorreccion.collectAsState()
     val franjaHoraria by viewModel.franjaHoraria.collectAsState()
     val nivelEstres by viewModel.nivelEstres.collectAsState()
@@ -191,6 +195,8 @@ fun NuevaComidaScreen(
                     isSaving = isSaving,
                     searchQuery = searchQuery,
                     notas = notas,
+                    activeInsulinSnapshot = activeInsulinSnapshot,
+                    activeInsulinLoading = activeInsulinLoading,
                     dosisConCorreccion = dosisConCorreccion,
                     franjaHoraria = franjaHoraria,
                     nivelEstres = nivelEstres,
@@ -325,6 +331,8 @@ private fun NuevaComidaContent(
     isSaving: Boolean,
     searchQuery: String,
     notas: String,
+    activeInsulinSnapshot: ActiveInsulinSnapshot,
+    activeInsulinLoading: Boolean,
     dosisConCorreccion: Boolean,
     franjaHoraria: FranjaHoraria,
     nivelEstres: NivelEstres,
@@ -476,6 +484,12 @@ private fun NuevaComidaContent(
                 shape = RoundedCornerShape(12.dp)
             )
 
+            ActiveInsulinIndicatorCard(
+                snapshot = activeInsulinSnapshot,
+                isLoading = activeInsulinLoading,
+                title = "Insulina activa actual"
+            )
+
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
 
             // Tarjeta de resultados
@@ -562,7 +576,9 @@ private fun NuevaComidaContent(
                         }
                     }
 
-                    if (kotlin.math.abs(calculo.unidadesCorreccion) >= 0.05f) {
+                    if (kotlin.math.abs(calculo.unidadesCorreccionBruta) >= 0.05f ||
+                        calculo.unidadesCorreccionReducidaPorActiva > 0f
+                    ) {
                         Text(
                             text = "Insulina por comida (sin corrección glucosa): ${String.format("%.1f", calculo.unidadesInsulinaSinCorreccion)} U",
                             style = MaterialTheme.typography.bodySmall,
@@ -581,6 +597,15 @@ private fun NuevaComidaContent(
                         } else {
                             Text(
                                 text = "Corrección por glucosa: $signo${String.format("%.1f", calculo.unidadesCorreccion)} U",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+
+                        if (calculo.unidadesCorreccionReducidaPorActiva > 0f) {
+                            Text(
+                                text = "Ajuste por insulina activa (${String.format("%.1f", calculo.insulinaActivaActual)} U): -${String.format("%.1f", calculo.unidadesCorreccionReducidaPorActiva)} U",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

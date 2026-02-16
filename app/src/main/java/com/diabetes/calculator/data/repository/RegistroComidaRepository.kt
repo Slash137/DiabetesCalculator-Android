@@ -6,6 +6,9 @@ import com.diabetes.calculator.data.entity.AlimentoEnRegistro
 import com.diabetes.calculator.data.entity.EstadoDosis
 import com.diabetes.calculator.data.entity.OrigenRegistro
 import com.diabetes.calculator.data.entity.RegistroComida
+import com.diabetes.calculator.domain.ACTIVE_INSULIN_DURATION_MINUTES
+import com.diabetes.calculator.domain.ActiveInsulinCalculator
+import com.diabetes.calculator.domain.ActiveInsulinSnapshot
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -77,6 +80,12 @@ class RegistroComidaRepository(private val dao: RegistroComidaDao) {
 
     suspend fun sumInsulinaInRange(start: Long, end: Long): Float =
         dao.sumInsulinaInRange(start, end)
+
+    suspend fun getActiveInsulinSnapshot(nowMillis: Long): ActiveInsulinSnapshot {
+        val fromMillis = nowMillis - (ACTIVE_INSULIN_DURATION_MINUTES * 60_000L)
+        val dosis = dao.getReliableAppliedDosesInWindow(fromMillis, nowMillis)
+        return ActiveInsulinCalculator.calculate(dosis, nowMillis)
+    }
 
     suspend fun getRegistroRawById(id: Int): RegistroComida? = dao.getRegistroRawById(id)
 
