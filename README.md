@@ -24,7 +24,11 @@ Aplicación Android para el cálculo de hidratos, raciones e insulina rápida, c
 - Comidas con múltiples alimentos y notas.
 - Historial agrupado por día con colapsado/expandido y filtros por rango.
 - Biblioteca de alimentos con búsqueda, edición y eliminación.
-- Integración con Nightscout para glucosa actual y registro de glucosa previa a la comida.
+- Integración con Nightscout para glucosa actual, tendencia y registro de glucosa previa a la comida.
+- Cálculo con Nightscout autoritativo: si hay dato remoto (glucosa/tendencia/insulina), ese dato manda.
+- Ajuste automático de corrección por tendencia CGM (flecha Nightscout) en modo con corrección.
+- Fallback manual de glucosa cuando no hay lectura Nightscout reciente.
+- IOB híbrida: prioridad Nightscout + dosis locales aplicadas provisionales hasta que llegue el remoto.
 - Registro automático de glucosa a las 2 horas (si Nightscout está configurado).
 - Copias de seguridad manuales (exportar/importar) y automáticas diarias cifradas.
 - Importación de la última copia automática desde la pantalla de perfil.
@@ -55,8 +59,42 @@ Aplicación Android para el cálculo de hidratos, raciones e insulina rápida, c
 
 - Configura URL y token (opcional) en **Perfil**.
 - Se muestra la glucosa actual en la barra superior.
-- Al guardar una comida se registra la glucosa previa si Nightscout está activo.
+- Al guardar una comida, si hay lectura fresca de Nightscout, esa glucosa se usa como referencia principal.
+- Si no hay lectura fresca, puedes introducir glucosa manual (fallback) para continuar el cálculo.
+- La corrección por glucosa aplica ajuste por tendencia (`direction`) cuando la lectura usada es Nightscout.
+- En conflictos de datos para IOB, Nightscout tiene prioridad; una dosis local aplicada cuenta de forma provisional hasta sincronizar.
 - Se programa un worker para consultar la glucosa a las 2 horas.
+
+## Transparencia del cálculo
+
+- La pantalla **Nueva comida** muestra la fuente de glucosa usada (`Nightscout` o `Manual fallback`).
+- Si la fuente es Nightscout, muestra flecha de tendencia, antigüedad de lectura y glucosa proyectada.
+- También se muestra el ajuste en unidades aplicado por tendencia, además del ajuste por insulina activa.
+- El redondeo de dosis se realiza una sola vez al final del cálculo (pasos de 0.5 U).
+
+## Informe IA (Google Gemini)
+
+- En **Estadísticas** hay un icono de IA (brillo) en el `TopAppBar` para generar un informe con los datos del periodo seleccionado.
+- La app usa **Firebase AI Logic** para invocar Gemini con mínima interacción de usuario (sin login obligatorio).
+
+Configuración local recomendada:
+
+1. Crea un proyecto en Firebase y añade la app Android con paquete `com.diabetes.calculator`.
+2. Descarga `google-services.json` y colócalo en `app/google-services.json`.
+3. En Firebase AI Logic, configura backend de Gemini para tu proyecto.
+4. (Opcional) Define modelo por defecto en `local.properties`:
+
+```properties
+GEMINI_MODEL=gemini-2.5-flash
+```
+
+5. Alternativamente, define `GEMINI_MODEL` como variable de entorno.
+6. Si no defines `GEMINI_MODEL`, se usa `gemini-2.5-flash`.
+
+Notas:
+
+- `local.properties` está en `.gitignore`.
+- En `release` se usa App Check con Play Integrity; en `debug` se usa Debug App Check.
 
 ## Copias de seguridad
 
