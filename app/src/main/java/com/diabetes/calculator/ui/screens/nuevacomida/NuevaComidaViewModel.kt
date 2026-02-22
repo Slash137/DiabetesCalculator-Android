@@ -23,6 +23,7 @@ import com.diabetes.calculator.data.entity.calcularDesdeCantidad
 import com.diabetes.calculator.data.entity.estadoFisicoNormalizado
 import com.diabetes.calculator.data.entity.requiereEquivalenciaUnidad
 import com.diabetes.calculator.data.entity.tipoMedicionNormalizado
+import com.diabetes.calculator.data.model.NightscoutEntry
 import com.diabetes.calculator.data.repository.AlimentoRepository
 import com.diabetes.calculator.data.repository.NightscoutRepository
 import com.diabetes.calculator.data.repository.PendingGlucoseRepository
@@ -30,12 +31,17 @@ import com.diabetes.calculator.data.repository.PlantillaRepository
 import com.diabetes.calculator.data.repository.RegistroComidaRepository
 import com.diabetes.calculator.data.repository.RegistroNightscoutSyncRepository
 import com.diabetes.calculator.data.repository.UsuarioProfileRepository
+import com.diabetes.calculator.domain.CgmReading
+import com.diabetes.calculator.domain.CgmSource
+import com.diabetes.calculator.domain.CgmTrendCorrection
 import com.diabetes.calculator.domain.FactoresContextoInsulina
 import com.diabetes.calculator.domain.FaseCicloHormonal
 import com.diabetes.calculator.domain.FranjaHoraria
 import com.diabetes.calculator.domain.NivelEjercicio
 import com.diabetes.calculator.domain.NivelEnfermedad
 import com.diabetes.calculator.domain.NivelEstres
+import com.diabetes.calculator.domain.NightscoutAuthorityPolicy
+import com.diabetes.calculator.domain.ResolvedCgmReading
 import com.diabetes.calculator.domain.SeleccionContextoInsulina
 import com.diabetes.calculator.domain.ActiveInsulinSnapshot
 import com.diabetes.calculator.util.DateUtils
@@ -43,7 +49,8 @@ import com.diabetes.calculator.util.NightscoutRetryPolicy
 import com.diabetes.calculator.work.Glucosa2hWorker
 import com.diabetes.calculator.work.NightscoutRetryWorker
 import com.diabetes.calculator.work.NightscoutSyncWorker
-import com.diabetes.calculator.work.Recordatorio2hWorker
+import com.diabetes.calculator.work.Recordatorio2hScheduler
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -53,10 +60,69 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.Locale
 import java.util.concurrent.TimeUnit
+
+private const val NUEVA_COMIDA_SEARCH_DEBOUNCE_MS = 180L
+private const val TWO_HOURS_MS = 2 * 60 * 60 * 1000L
+private const val NIGHTSCOUT_FRESHNESS_MINUTES = 10
+private const val CGM_PROJECTION_MINUTES = 30
+private const val TREND_ADJUSTMENT_CAP_UNITS = 1.0f
+
+internal data class ResultadoDosisActiva(
+    val unidadesCorreccion: Float,
+    val unidadesCorreccionReducidaPorActiva: Float,
+    val unidadesComidaReducidaPorActiva: Float,
+    val unidadesInsulinaConCorreccion: Float,
+    val unidadesInsulinaSinCorreccion: Float
+)
+
+internal fun calcularDosisFinalConInsulinaActiva(
+    unidadesComida: Float,
+    unidadesCorreccionBruta: Float,
+    insulinaActiva: Float,
+    factorTotalAplicado: Float
+): ResultadoDosisActiva {
+    val insulinaActivaSegura = insulinaActiva
+        .takeIf { it.isFinite() && it > 0f }
+        ?: 0f
+    val reduccionCorreccionPorActiva = if (unidadesCorreccionBruta > 0f) {
+        kotlin.math.min(unidadesCorreccionBruta, insulinaActivaSegura)
+    } else {
+        0f
+    }
+    val unidadesCorreccion = unidadesCorreccionBruta - reduccionCorreccionPorActiva
+    val insulinaActivaResidual = (insulinaActivaSegura - reduccionCorreccionPorActiva).coerceAtLeast(0f)
+    val dosisContextualRaw = FactoresContextoInsulina.applyFactorToDosesRaw(
+        unidadesComida = unidadesComida,
+        unidadesCorreccion = unidadesCorreccion,
+        factorTotalAplicado = factorTotalAplicado
+    )
+    val reduccionComidaPorActiva = kotlin.math.min(
+        kotlin.math.min(dosisContextualRaw.totalSinCorreccion, dosisContextualRaw.totalConCorreccion),
+        insulinaActivaResidual
+    )
+    val unidadesSinCorreccion = FactoresContextoInsulina.roundToHalf(
+        (dosisContextualRaw.totalSinCorreccion - reduccionComidaPorActiva).coerceAtLeast(0f)
+    )
+    val unidadesConCorreccion = FactoresContextoInsulina.roundToHalf(
+        (dosisContextualRaw.totalConCorreccion - reduccionComidaPorActiva).coerceAtLeast(0f)
+    )
+
+    return ResultadoDosisActiva(
+        unidadesCorreccion = unidadesCorreccion,
+        unidadesCorreccionReducidaPorActiva = reduccionCorreccionPorActiva,
+        unidadesComidaReducidaPorActiva = reduccionComidaPorActiva,
+        unidadesInsulinaConCorreccion = unidadesConCorreccion,
+        unidadesInsulinaSinCorreccion = unidadesSinCorreccion
+    )
+}
 
 /**
  * Representa un elemento individual dentro de una comida en construcción.
@@ -94,10 +160,17 @@ data class CalculoActual(
     val unidadesCorreccionBruta: Float = 0f,
     val unidadesCorreccion: Float = 0f,
     val unidadesCorreccionReducidaPorActiva: Float = 0f,
+    val unidadesComidaReducidaPorActiva: Float = 0f,
     val insulinaActivaActual: Float = 0f,
     val unidadesInsulina: Float = 0f,
     val unidadesInsulinaSinCorreccion: Float = 0f,
     val glucosaUsadaMgdl: Int? = null,
+    val glucosaFuente: CgmSource? = null,
+    val glucosaEdadMinutos: Int? = null,
+    val tendenciaDireccion: String? = null,
+    val glucosaProyectadaMgdl: Int? = null,
+    val correccionBaseRaw: Float = 0f,
+    val ajusteTendenciaRaw: Float = 0f,
     val franjaHoraria: FranjaHoraria = FactoresContextoInsulina.defaultSelection().franjaHoraria,
     val nivelEstres: NivelEstres = NivelEstres.NINGUNO,
     val nivelEnfermedad: NivelEnfermedad = NivelEnfermedad.NINGUNA,
@@ -166,7 +239,11 @@ class NuevaComidaViewModel(
     private val _nivelEjercicio = MutableStateFlow(initialContext.nivelEjercicio)
     val nivelEjercicio: StateFlow<NivelEjercicio> = _nivelEjercicio.asStateFlow()
 
-    private val _glucosaActualMgdl = MutableStateFlow<Int?>(null)
+    private val _nightscoutEntry = MutableStateFlow<NightscoutEntry?>(null)
+    private val _manualGlucosaFallbackInput = MutableStateFlow("")
+    val manualGlucosaFallbackInput: StateFlow<String> = _manualGlucosaFallbackInput.asStateFlow()
+    private val _allowManualGlucosaFallback = MutableStateFlow(true)
+    val allowManualGlucosaFallback: StateFlow<Boolean> = _allowManualGlucosaFallback.asStateFlow()
     private val _dosisConCorreccion = MutableStateFlow(false)
     val dosisConCorreccion: StateFlow<Boolean> = _dosisConCorreccion.asStateFlow()
     private var correctionSelectionEdited = false
@@ -196,22 +273,32 @@ class NuevaComidaViewModel(
         startActiveInsulinTicker()
     }
 
+    @OptIn(FlowPreview::class)
     private fun loadData() {
         viewModelScope.launch {
+            val debouncedSearchQuery = _searchQuery
+                .map { it.trim() }
+                .debounce(NUEVA_COMIDA_SEARCH_DEBOUNCE_MS)
+                .distinctUntilChanged()
+
             combine(
                 usuarioRepository.profile,
                 alimentoRepository.alimentos,
-                _searchQuery
+                debouncedSearchQuery
             ) { profile, allAlimentos, query ->
                 Triple(profile, allAlimentos, query)
             }.collect { (profile, allAlimentos, query) ->
                 if (profile == null) {
                     cachedProfile = null
+                    cachedAlimentos = emptyList()
                     contextInitialized = false
                     _uiState.value = NuevaComidaUiState.NoProfile
                 } else {
+                    val profileChanged = cachedProfile != profile
+                    val alimentosChanged = cachedAlimentos !== allAlimentos
                     val wasNull = cachedProfile == null
                     cachedProfile = profile
+                    cachedAlimentos = allAlimentos
                     if (wasNull || !contextInitialized) {
                         resetContextSelections()
                         contextInitialized = true
@@ -220,8 +307,9 @@ class NuevaComidaViewModel(
                         _faseCiclo.value = FaseCicloHormonal.NO_APLICAR
                     }
 
-                    recalculate()
-                    cachedAlimentos = allAlimentos
+                    if (profileChanged || alimentosChanged) {
+                        recalculate()
+                    }
                     val filtered = if (query.isBlank()) {
                         allAlimentos
                     } else {
@@ -245,8 +333,16 @@ class NuevaComidaViewModel(
     }
 
     private suspend fun refreshActiveInsulin() {
+        val profile = cachedProfile
+        val nightscoutUrl = profile?.nightscoutUrl?.trim()
+        val nightscoutToken = profile?.nightscoutToken
         runCatching {
-            registroRepository.getActiveInsulinSnapshot(System.currentTimeMillis())
+            registroRepository.getActiveInsulinSnapshot(
+                nowMillis = System.currentTimeMillis(),
+                nightscoutRepository = nightscoutRepository,
+                nightscoutUrl = nightscoutUrl,
+                nightscoutToken = nightscoutToken
+            )
         }.onSuccess { snapshot ->
             _activeInsulinSnapshot.value = snapshot
             _activeInsulinLoading.value = false
@@ -260,13 +356,15 @@ class NuevaComidaViewModel(
         _searchQuery.value = query
     }
 
-    fun updateGlucosaActual(glucosaMgdl: Int?) {
-        if (glucosaMgdl == null) {
-            val nightscoutConfigured = !cachedProfile?.nightscoutUrl.isNullOrBlank()
-            if (nightscoutConfigured) return
-        }
-        if (_glucosaActualMgdl.value == glucosaMgdl) return
-        _glucosaActualMgdl.value = glucosaMgdl
+    fun updateNightscoutEntry(entry: NightscoutEntry?) {
+        if (_nightscoutEntry.value == entry) return
+        _nightscoutEntry.value = entry
+        recalculate()
+    }
+
+    fun updateManualGlucosaFallback(value: String) {
+        if (value.isNotEmpty() && !value.matches(Regex("^\\d*$"))) return
+        _manualGlucosaFallbackInput.value = value
         recalculate()
     }
 
@@ -407,13 +505,15 @@ class NuevaComidaViewModel(
 
     private fun recalculate() {
         val profile = cachedProfile ?: return
+        val nowMillis = System.currentTimeMillis()
         val totalHidratos = _items.value.sumOf { it.hidratos.toDouble() }.toFloat()
         val nuevoCalculo = buildCalculo(
             profile = profile,
             totalHidratos = totalHidratos,
-            glucosaMgdl = _glucosaActualMgdl.value
+            nowMillis = nowMillis
         )
         _calculo.value = nuevoCalculo
+        _allowManualGlucosaFallback.value = nuevoCalculo.glucosaFuente != CgmSource.NIGHTSCOUT
         if (!correctionSelectionEdited) {
             _dosisConCorreccion.value = profile.aplicarCorreccionPorDefecto && hasRealtimeCorrection(nuevoCalculo)
         }
@@ -457,18 +557,19 @@ class NuevaComidaViewModel(
                 if (nightscoutEnabled) {
                     val fetched = nightscoutRepository
                         .getLatestGlucose(nightscoutUrl!!, profile.nightscoutToken)
-                        ?.sgv
-                    glucosaAntes = fetched ?: _glucosaActualMgdl.value
-                    if (glucosaAntes == null) {
-                        pendingAntes = true
+                    if (fetched != null) {
+                        _nightscoutEntry.value = fetched
                     }
                 }
+                val resolvedGlucose = resolveGlucoseInput(System.currentTimeMillis())
+                glucosaAntes = resolvedGlucose.reading?.mgdl
+                pendingAntes = nightscoutEnabled && resolvedGlucose.reading?.source != CgmSource.NIGHTSCOUT
 
                 val totalHidratos = validItems.sumOf { it.hidratos.toDouble() }.toFloat()
                 val calc = buildCalculo(
                     profile = profile,
                     totalHidratos = totalHidratos,
-                    glucosaMgdl = glucosaAntes ?: _glucosaActualMgdl.value
+                    nowMillis = System.currentTimeMillis()
                 )
                 val unidadesSeleccionadas = selectedInsulinUnits(calc, _dosisConCorreccion.value)
                 if (calc.hidratosTotales.isNaN() || calc.hidratosTotales.isInfinite() ||
@@ -540,7 +641,11 @@ class NuevaComidaViewModel(
                     NightscoutSyncWorker.enqueueNow(workManager)
                 }
                 if (profile.recordatorio2hActivo) {
-                    scheduleRecordatorio2h(registroId)
+                    Recordatorio2hScheduler.schedule(
+                        workManager = workManager,
+                        registroId = registroId,
+                        triggerAtMillis = registro.fecha + TWO_HOURS_MS
+                    )
                 }
                 if (pendingAntes) {
                     pendingGlucoseRepository.insert(
@@ -571,7 +676,7 @@ class NuevaComidaViewModel(
     private fun buildCalculo(
         profile: UsuarioProfile,
         totalHidratos: Float,
-        glucosaMgdl: Int?
+        nowMillis: Long
     ): CalculoActual {
         val raciones = if (profile.gramosPorRacion > 0f) {
             totalHidratos / profile.gramosPorRacion
@@ -583,20 +688,24 @@ class NuevaComidaViewModel(
         } else {
             0f
         }
-        val unidadesCorreccionBruta = calculateCorrectionUnits(profile, glucosaMgdl)
+        val resolvedGlucose = resolveGlucoseInput(nowMillis)
+        val glucoseReading = resolvedGlucose.reading
+        val correctionWithTrend = CgmTrendCorrection.calculateCorrectionWithTrend(
+            reading = glucoseReading,
+            objetivoMgdl = profile.glucosaObjetivoMgdl,
+            factorCorreccionMgdlPorU = profile.factorCorreccionMgdlPorU,
+            projectionMinutes = CGM_PROJECTION_MINUTES,
+            trendAdjustmentCapUnits = TREND_ADJUSTMENT_CAP_UNITS
+        )
+        val unidadesCorreccionBruta = correctionWithTrend.correccionFinalRaw
         val insulinaActiva = _activeInsulinSnapshot.value.totalUnits
             .takeIf { it.isFinite() && it > 0f }
             ?: 0f
-        val reduccionPorActiva = if (unidadesCorreccionBruta > 0f) {
-            kotlin.math.min(unidadesCorreccionBruta, insulinaActiva)
-        } else {
-            0f
-        }
-        val unidadesCorreccion = unidadesCorreccionBruta - reduccionPorActiva
         val contexto = FactoresContextoInsulina.resolve(profile, currentSelection(profile))
-        val dosisContextual = FactoresContextoInsulina.applyFactorToDoses(
+        val dosisFinal = calcularDosisFinalConInsulinaActiva(
             unidadesComida = unidadesComida,
-            unidadesCorreccion = unidadesCorreccion,
+            unidadesCorreccionBruta = unidadesCorreccionBruta,
+            insulinaActiva = insulinaActiva,
             factorTotalAplicado = contexto.factorTotalAplicado
         )
 
@@ -605,12 +714,23 @@ class NuevaComidaViewModel(
             raciones = raciones,
             unidadesComida = unidadesComida,
             unidadesCorreccionBruta = unidadesCorreccionBruta,
-            unidadesCorreccion = unidadesCorreccion,
-            unidadesCorreccionReducidaPorActiva = reduccionPorActiva,
+            unidadesCorreccion = dosisFinal.unidadesCorreccion,
+            unidadesCorreccionReducidaPorActiva = dosisFinal.unidadesCorreccionReducidaPorActiva,
+            unidadesComidaReducidaPorActiva = dosisFinal.unidadesComidaReducidaPorActiva,
             insulinaActivaActual = insulinaActiva,
-            unidadesInsulina = dosisContextual.totalConCorreccion,
-            unidadesInsulinaSinCorreccion = dosisContextual.totalSinCorreccion,
-            glucosaUsadaMgdl = glucosaMgdl,
+            unidadesInsulina = dosisFinal.unidadesInsulinaConCorreccion,
+            unidadesInsulinaSinCorreccion = dosisFinal.unidadesInsulinaSinCorreccion,
+            glucosaUsadaMgdl = glucoseReading?.mgdl,
+            glucosaFuente = glucoseReading?.source,
+            glucosaEdadMinutos = if (glucoseReading?.source == CgmSource.NIGHTSCOUT) {
+                ((nowMillis - glucoseReading.timestampMillis).coerceAtLeast(0L) / 60_000L).toInt()
+            } else {
+                null
+            },
+            tendenciaDireccion = glucoseReading?.direction,
+            glucosaProyectadaMgdl = correctionWithTrend.projectedGlucoseMgdl,
+            correccionBaseRaw = correctionWithTrend.correccionBaseRaw,
+            ajusteTendenciaRaw = correctionWithTrend.ajusteTendenciaRaw,
             franjaHoraria = _franjaHoraria.value,
             nivelEstres = _nivelEstres.value,
             nivelEnfermedad = _nivelEnfermedad.value,
@@ -642,12 +762,36 @@ class NuevaComidaViewModel(
         )
     }
 
-    private fun calculateCorrectionUnits(profile: UsuarioProfile, glucosaMgdl: Int?): Float {
-        if (glucosaMgdl == null) return 0f
-        val objetivo = profile.glucosaObjetivoMgdl ?: return 0f
-        val factor = profile.factorCorreccionMgdlPorU ?: return 0f
-        if (objetivo <= 0 || factor <= 0f) return 0f
-        return (glucosaMgdl - objetivo) / factor
+    private fun resolveGlucoseInput(nowMillis: Long): ResolvedCgmReading {
+        val nightscoutReading = _nightscoutEntry.value
+            ?.let { entry ->
+                CgmReading(
+                    mgdl = entry.sgv,
+                    direction = entry.direction,
+                    timestampMillis = entry.date,
+                    source = CgmSource.NIGHTSCOUT
+                )
+            }
+        val manualFallback = parseManualGlucoseFallback()?.let { mgdl ->
+            CgmReading(
+                mgdl = mgdl,
+                direction = null,
+                timestampMillis = nowMillis,
+                source = CgmSource.MANUAL_FALLBACK
+            )
+        }
+        return NightscoutAuthorityPolicy.resolveGlucoseSource(
+            nightscoutReading = nightscoutReading,
+            manualFallback = manualFallback,
+            nowMillis = nowMillis,
+            freshnessMinutes = NIGHTSCOUT_FRESHNESS_MINUTES
+        )
+    }
+
+    private fun parseManualGlucoseFallback(): Int? {
+        val value = _manualGlucosaFallbackInput.value.trim()
+        val mgdl = value.toIntOrNull() ?: return null
+        return mgdl.takeIf { it in 20..600 }
     }
 
     private fun hasRealtimeCorrection(calculo: CalculoActual): Boolean {
@@ -674,6 +818,7 @@ class NuevaComidaViewModel(
     private fun resetForm() {
         _items.value = listOf(ItemComidaTemporal())
         _notas.value = ""
+        _manualGlucosaFallbackInput.value = ""
         _calculo.value = CalculoActual()
         _dosisConCorreccion.value = false
         correctionSelectionEdited = false
@@ -780,9 +925,9 @@ class NuevaComidaViewModel(
 
     private fun formatCantidad(value: Float): String {
         return if (value % 1f == 0f) {
-            String.format("%.0f", value)
+            String.format(Locale.getDefault(), "%.0f", value)
         } else {
-            String.format("%.1f", value)
+            String.format(Locale.getDefault(), "%.1f", value)
         }
     }
 
@@ -815,7 +960,7 @@ class NuevaComidaViewModel(
         return if (mensajes.isEmpty()) null else mensajes.joinToString(" · ")
     }
 
-    private fun format1(value: Float): String = String.format("%.1f", value)
+    private fun format1(value: Float): String = String.format(Locale.getDefault(), "%.1f", value)
 
     private fun scheduleGlucosa2h(registroId: Int) {
         val constraints = Constraints.Builder()
@@ -830,18 +975,6 @@ class NuevaComidaViewModel(
 
         workManager.enqueueUniqueWork(
             "glucosa_2h_$registroId",
-            ExistingWorkPolicy.REPLACE,
-            request
-        )
-    }
-
-    private fun scheduleRecordatorio2h(registroId: Int) {
-        val request = OneTimeWorkRequestBuilder<Recordatorio2hWorker>()
-            .setInitialDelay(2, TimeUnit.HOURS)
-            .setInputData(workDataOf(Recordatorio2hWorker.KEY_REGISTRO_ID to registroId))
-            .build()
-        workManager.enqueueUniqueWork(
-            "recordatorio_2h_$registroId",
             ExistingWorkPolicy.REPLACE,
             request
         )

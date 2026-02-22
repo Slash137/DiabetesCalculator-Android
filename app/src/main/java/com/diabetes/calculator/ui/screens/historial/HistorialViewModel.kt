@@ -3,6 +3,7 @@ package com.diabetes.calculator.ui.screens.historial
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.work.WorkManager
 import com.diabetes.calculator.data.dao.RegistroComidaConItems
 import com.diabetes.calculator.data.entity.EstadoDosis
 import com.diabetes.calculator.data.entity.OrigenRegistro
@@ -13,6 +14,9 @@ import com.diabetes.calculator.data.repository.NightscoutTreatmentTombstoneRepos
 import com.diabetes.calculator.data.repository.PlantillaRepository
 import com.diabetes.calculator.data.repository.RegistroComidaRepository
 import com.diabetes.calculator.data.repository.UsuarioProfileRepository
+import com.diabetes.calculator.work.NightscoutSyncWorker
+import com.diabetes.calculator.work.Recordatorio2hScheduler
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -53,7 +57,8 @@ class HistorialViewModel(
     private val plantillaRepository: PlantillaRepository,
     private val usuarioRepository: UsuarioProfileRepository,
     private val nightscoutTreatmentTombstoneRepository: NightscoutTreatmentTombstoneRepository,
-    private val nightscoutRepository: NightscoutRepository
+    private val nightscoutRepository: NightscoutRepository,
+    private val workManager: WorkManager
 ) : ViewModel() {
     
     private val _uiState = MutableStateFlow<HistorialUiState>(HistorialUiState.Loading)
@@ -82,10 +87,15 @@ class HistorialViewModel(
         observeRegistros()
     }
     
-    @OptIn(ExperimentalCoroutinesApi::class)
+    @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
     private fun observeRegistros() {
         viewModelScope.launch {
-            combine(_searchQuery, _dayFilter, _doseStatusFilter) { query, dayFilter, doseFilter ->
+            val debouncedQueryFlow = _searchQuery
+                .map { it.trim() }
+                .debounce(SEARCH_DEBOUNCE_MS)
+                .distinctUntilChanged()
+
+            combine(debouncedQueryFlow, _dayFilter, _doseStatusFilter) { query, dayFilter, doseFilter ->
                 Triple(query, dayFilter, doseFilter)
             }.flatMapLatest { (query, dayFilter, doseFilter) ->
                 val flow = if (query.isBlank()) {
@@ -148,6 +158,32 @@ class HistorialViewModel(
                 }
             }
             repository.updateDosisEstado(registroId, status)
+
+            if (status == EstadoDosis.OMITIDA) {
+                Recordatorio2hScheduler.cancel(workManager, registroId)
+            } else {
+                val profile = usuarioRepository.getProfileSync()
+                val updatedRegistro = repository.getRegistroRawById(registroId)
+                if (profile?.recordatorio2hActivo == true && updatedRegistro != null) {
+                    val triggerAtMillis = when (status) {
+                        EstadoDosis.APLICADA -> {
+                            (updatedRegistro.dosisConfirmadaAt ?: System.currentTimeMillis()) + TWO_HOURS_MS
+                        }
+                        EstadoDosis.PENDIENTE -> {
+                            updatedRegistro.fecha + TWO_HOURS_MS
+                        }
+                        EstadoDosis.OMITIDA -> null
+                    }
+                    if (triggerAtMillis != null) {
+                        Recordatorio2hScheduler.schedule(
+                            workManager = workManager,
+                            registroId = registroId,
+                            triggerAtMillis = triggerAtMillis
+                        )
+                    }
+                }
+            }
+
             if (status == EstadoDosis.OMITIDA) {
                 repository.clearNightscoutLink(registroId)
             }
@@ -163,6 +199,7 @@ class HistorialViewModel(
     fun updateDoseForLink(registroId: Int, unidades: Float, confirmadaAt: Long?) {
         viewModelScope.launch {
             repository.updateDoseForLink(registroId, unidades, confirmadaAt)
+            NightscoutSyncWorker.enqueueNow(workManager, forceManual = true)
         }
     }
 
@@ -293,7 +330,8 @@ class HistorialViewModel(
         private val plantillaRepository: PlantillaRepository,
         private val usuarioRepository: UsuarioProfileRepository,
         private val nightscoutTreatmentTombstoneRepository: NightscoutTreatmentTombstoneRepository,
-        private val nightscoutRepository: NightscoutRepository
+        private val nightscoutRepository: NightscoutRepository,
+        private val workManager: WorkManager
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -303,10 +341,16 @@ class HistorialViewModel(
                     plantillaRepository,
                     usuarioRepository,
                     nightscoutTreatmentTombstoneRepository,
-                    nightscoutRepository
+                    nightscoutRepository,
+                    workManager
                 ) as T
             }
             throw IllegalArgumentException("Clase de ViewModel desconocida")
         }
+    }
+
+    companion object {
+        private const val SEARCH_DEBOUNCE_MS = 180L
+        private const val TWO_HOURS_MS = 2 * 60 * 60 * 1000L
     }
 }

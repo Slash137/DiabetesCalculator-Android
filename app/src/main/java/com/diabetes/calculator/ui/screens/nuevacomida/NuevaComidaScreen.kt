@@ -19,6 +19,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -81,6 +82,9 @@ import com.diabetes.calculator.data.entity.estadoFisicoNormalizado
 import com.diabetes.calculator.data.entity.requiereEquivalenciaUnidad
 import com.diabetes.calculator.data.entity.tipoMedicionNormalizado
 import com.diabetes.calculator.data.dao.PlantillaConItems
+import com.diabetes.calculator.data.model.NightscoutEntry
+import com.diabetes.calculator.domain.CgmSource
+import com.diabetes.calculator.domain.CgmTrendCorrection
 import com.diabetes.calculator.domain.FactoresContextoInsulina
 import com.diabetes.calculator.domain.FaseCicloHormonal
 import com.diabetes.calculator.domain.FranjaHoraria
@@ -108,7 +112,7 @@ import java.util.Locale
 fun NuevaComidaScreen(
     viewModel: NuevaComidaViewModel,
     onNavigateToProfile: () -> Unit = {},
-    currentGlucoseMgdl: Int? = null,
+    currentGlucoseEntry: NightscoutEntry? = null,
     tabChangeSignal: Int = 0
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -127,6 +131,8 @@ fun NuevaComidaScreen(
     val nivelEnfermedad by viewModel.nivelEnfermedad.collectAsState()
     val faseCiclo by viewModel.faseCiclo.collectAsState()
     val nivelEjercicio by viewModel.nivelEjercicio.collectAsState()
+    val manualGlucosaFallbackInput by viewModel.manualGlucosaFallbackInput.collectAsState()
+    val allowManualGlucosaFallback by viewModel.allowManualGlucosaFallback.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -167,8 +173,8 @@ fun NuevaComidaScreen(
         snackbarHostState.currentSnackbarData?.dismiss()
     }
 
-    LaunchedEffect(currentGlucoseMgdl) {
-        viewModel.updateGlucosaActual(currentGlucoseMgdl)
+    LaunchedEffect(currentGlucoseEntry) {
+        viewModel.updateNightscoutEntry(currentGlucoseEntry)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -198,6 +204,8 @@ fun NuevaComidaScreen(
                     activeInsulinSnapshot = activeInsulinSnapshot,
                     activeInsulinLoading = activeInsulinLoading,
                     dosisConCorreccion = dosisConCorreccion,
+                    manualGlucosaFallbackInput = manualGlucosaFallbackInput,
+                    allowManualGlucosaFallback = allowManualGlucosaFallback,
                     franjaHoraria = franjaHoraria,
                     nivelEstres = nivelEstres,
                     nivelEnfermedad = nivelEnfermedad,
@@ -208,6 +216,7 @@ fun NuevaComidaScreen(
                     onSearchQueryChange = viewModel::updateSearchQuery,
                     onNotasChange = viewModel::updateNotas,
                     onDosisConCorreccionChange = viewModel::updateDosisConCorreccion,
+                    onManualGlucosaFallbackChange = viewModel::updateManualGlucosaFallback,
                     onFranjaHorariaChange = viewModel::updateFranjaHoraria,
                     onNivelEstresChange = viewModel::updateNivelEstres,
                     onNivelEnfermedadChange = viewModel::updateNivelEnfermedad,
@@ -334,6 +343,8 @@ private fun NuevaComidaContent(
     activeInsulinSnapshot: ActiveInsulinSnapshot,
     activeInsulinLoading: Boolean,
     dosisConCorreccion: Boolean,
+    manualGlucosaFallbackInput: String,
+    allowManualGlucosaFallback: Boolean,
     franjaHoraria: FranjaHoraria,
     nivelEstres: NivelEstres,
     nivelEnfermedad: NivelEnfermedad,
@@ -344,6 +355,7 @@ private fun NuevaComidaContent(
     onSearchQueryChange: (String) -> Unit,
     onNotasChange: (String) -> Unit,
     onDosisConCorreccionChange: (Boolean) -> Unit,
+    onManualGlucosaFallbackChange: (String) -> Unit,
     onFranjaHorariaChange: (FranjaHoraria) -> Unit,
     onNivelEstresChange: (NivelEstres) -> Unit,
     onNivelEnfermedadChange: (NivelEnfermedad) -> Unit,
@@ -518,14 +530,14 @@ private fun NuevaComidaContent(
                         CalculoSmallCard(
                             modifier = Modifier.weight(1f),
                             label = "Hidratos",
-                            value = String.format("%.1f", calculo.hidratosTotales),
+                            value = String.format(Locale.getDefault(), "%.1f", calculo.hidratosTotales),
                             unit = "g",
                             color = HidratosColor
                         )
                         CalculoSmallCard(
                             modifier = Modifier.weight(1f),
                             label = "Raciones",
-                            value = String.format("%.1f", calculo.raciones),
+                            value = String.format(Locale.getDefault(), "%.1f", calculo.raciones),
                             unit = "rac.",
                             color = RacionesColor
                         )
@@ -568,7 +580,7 @@ private fun NuevaComidaContent(
                                 calculo.unidadesInsulinaSinCorreccion
                             }
                             Text(
-                                text = "${String.format("%.1f", dosisMostrada)} U",
+                                text = "${String.format(Locale.getDefault(), "%.1f", dosisMostrada)} U",
                                 style = MaterialTheme.typography.headlineMedium,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = MaterialTheme.colorScheme.primary
@@ -576,27 +588,94 @@ private fun NuevaComidaContent(
                         }
                     }
 
-                    if (kotlin.math.abs(calculo.unidadesCorreccionBruta) >= 0.05f ||
-                        calculo.unidadesCorreccionReducidaPorActiva > 0f
-                    ) {
+                    if (allowManualGlucosaFallback) {
+                        OutlinedTextField(
+                            value = manualGlucosaFallbackInput,
+                            onValueChange = onManualGlucosaFallbackChange,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Glucosa manual (mg/dL)") },
+                            placeholder = { Text("Ej: 145") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
                         Text(
-                            text = "Insulina por comida (sin corrección glucosa): ${String.format("%.1f", calculo.unidadesInsulinaSinCorreccion)} U",
+                            text = "Se usa solo cuando Nightscout no tiene lectura fresca.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+
+                    val trendArrow = CgmTrendCorrection.trendArrow(calculo.tendenciaDireccion)
+                    val fuenteTexto = when (calculo.glucosaFuente) {
+                        CgmSource.NIGHTSCOUT -> "Nightscout (autoridad)"
+                        CgmSource.MANUAL_FALLBACK -> "Manual (fallback)"
+                        null -> "Sin dato de glucosa"
+                    }
+                    val lecturaDetalle = when (calculo.glucosaFuente) {
+                        CgmSource.NIGHTSCOUT -> {
+                            val edad = calculo.glucosaEdadMinutos?.let { " · hace ${it}m" }.orEmpty()
+                            val valor = calculo.glucosaUsadaMgdl?.toString() ?: "N/D"
+                            "Glucosa usada: $valor mg/dL $trendArrow$edad"
+                        }
+                        CgmSource.MANUAL_FALLBACK -> {
+                            val valor = calculo.glucosaUsadaMgdl?.toString() ?: "N/D"
+                            "Glucosa usada: $valor mg/dL"
+                        }
+                        null -> "Glucosa usada: N/D"
+                    }
+                    Text(
+                        text = "Fuente de glucosa: $fuenteTexto",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = lecturaDetalle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (calculo.glucosaFuente == CgmSource.NIGHTSCOUT && calculo.glucosaProyectadaMgdl != null) {
+                        Text(
+                            text = "Glucosa proyectada (30 min): ${calculo.glucosaProyectadaMgdl} mg/dL",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "Ajuste por tendencia: ${if (calculo.ajusteTendenciaRaw >= 0f) "+" else ""}${String.format(Locale.getDefault(), "%.1f", calculo.ajusteTendenciaRaw)} U",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    if (kotlin.math.abs(calculo.unidadesCorreccionBruta) >= 0.05f ||
+                        calculo.unidadesCorreccionReducidaPorActiva > 0f ||
+                        calculo.unidadesComidaReducidaPorActiva > 0f
+                    ) {
+                        Text(
+                            text = "Insulina por comida (sin corrección glucosa): ${String.format(Locale.getDefault(), "%.1f", calculo.unidadesInsulinaSinCorreccion)} U",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        if (calculo.unidadesComidaReducidaPorActiva > 0f) {
+                            Text(
+                                text = "Ajuste por insulina activa en dosis base: -${String.format(Locale.getDefault(), "%.1f", calculo.unidadesComidaReducidaPorActiva)} U",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
 
                         val glucosaActual = calculo.glucosaUsadaMgdl
                         val signo = if (calculo.unidadesCorreccion >= 0f) "+" else ""
 
                         if (glucosaActual != null) {
                             Text(
-                                text = "Corrección por glucosa ($glucosaActual mg/dL): $signo${String.format("%.1f",calculo.unidadesCorreccion)} U",
+                                text = "Corrección por glucosa ($glucosaActual mg/dL): $signo${String.format(Locale.getDefault(), "%.1f",calculo.unidadesCorreccion)} U",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         } else {
                             Text(
-                                text = "Corrección por glucosa: $signo${String.format("%.1f", calculo.unidadesCorreccion)} U",
+                                text = "Corrección por glucosa: $signo${String.format(Locale.getDefault(), "%.1f", calculo.unidadesCorreccion)} U",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -605,7 +684,7 @@ private fun NuevaComidaContent(
 
                         if (calculo.unidadesCorreccionReducidaPorActiva > 0f) {
                             Text(
-                                text = "Ajuste por insulina activa (${String.format("%.1f", calculo.insulinaActivaActual)} U): -${String.format("%.1f", calculo.unidadesCorreccionReducidaPorActiva)} U",
+                                text = "Ajuste por insulina activa (${String.format(Locale.getDefault(), "%.1f", calculo.insulinaActivaActual)} U): -${String.format(Locale.getDefault(), "%.1f", calculo.unidadesCorreccionReducidaPorActiva)} U",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1289,7 +1368,7 @@ private fun ItemComidaRow(
                     
                     if (item.hidratos > 0) {
                         Text(
-                            text = "${String.format("%.1f", item.hidratos)}g HC",
+                            text = "${String.format(Locale.getDefault(), "%.1f", item.hidratos)}g HC",
                             style = MaterialTheme.typography.labelMedium,
                             color = HidratosColor,
                             fontWeight = FontWeight.Bold
@@ -1337,8 +1416,11 @@ private fun ItemComidaRow(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        items(alimentosFiltrados.size) { i ->
-                            val alimento = alimentosFiltrados[i]
+                        itemsIndexed(
+                            items = alimentosFiltrados,
+                            key = { _, alimento -> alimento.id },
+                            contentType = { _, _ -> "alimento" }
+                        ) { i, alimento ->
                             androidx.compose.material3.ListItem(
                                 headlineContent = { Text(alimento.nombre, fontWeight = FontWeight.Medium) },
                                 supportingContent = {
@@ -1465,15 +1547,16 @@ private fun PlantillasDialog(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(filtered.size) { index ->
-                            val plantilla = filtered[index]
-                            val totalHidratos = plantilla.items.sumOf {
-                                plantillaItemHidratos(it).toDouble()
-                            }.toFloat()
-                            val totalRaciones = if (gramosPorRacion > 0f) {
-                                totalHidratos / gramosPorRacion
-                            } else {
-                                0f
+                        itemsIndexed(
+                            items = filtered,
+                            key = { _, plantilla -> plantilla.plantilla.id },
+                            contentType = { _, _ -> "plantilla" }
+                        ) { _, plantilla ->
+                            val totalHidratos = remember(plantilla.items) {
+                                plantilla.items.sumOf { plantillaItemHidratos(it).toDouble() }.toFloat()
+                            }
+                            val totalRaciones = remember(totalHidratos, gramosPorRacion) {
+                                if (gramosPorRacion > 0f) totalHidratos / gramosPorRacion else 0f
                             }
                             Card(
                                 colors = CardDefaults.cardColors(

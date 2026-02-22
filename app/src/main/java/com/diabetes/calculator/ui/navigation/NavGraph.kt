@@ -19,6 +19,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Bloodtype
 import androidx.compose.material.icons.filled.History
@@ -234,6 +235,20 @@ fun DiabetesNavGraph(app: DiabetesApp) {
     BackHandler(enabled = showStats) {
         showStats = false
     }
+
+    val statsViewModel: EstadisticasViewModel? = if (showStats) {
+        viewModel(
+            factory = EstadisticasViewModel.Factory(
+                app.registroRepository,
+                app.usuarioRepository,
+                app.alimentoRepository,
+                app.nightscoutRepository,
+                app.geminiRepository
+            )
+        )
+    } else {
+        null
+    }
     
     Scaffold(
         topBar = {
@@ -311,7 +326,14 @@ fun DiabetesNavGraph(app: DiabetesApp) {
                     }
                 },
                 actions = {
-                    if (!showStats) {
+                    if (showStats) {
+                        IconButton(onClick = { statsViewModel?.consultarIa() }) {
+                            Icon(
+                                imageVector = Icons.Filled.AutoAwesome,
+                                contentDescription = "Consultar IA"
+                            )
+                        }
+                    } else {
                         IconButton(onClick = { showStats = true }) {
                             Icon(
                                 imageVector = Icons.Filled.BarChart,
@@ -363,19 +385,15 @@ fun DiabetesNavGraph(app: DiabetesApp) {
         }
     ) { innerPadding ->
         if (showStats) {
-            val viewModel: EstadisticasViewModel = viewModel(
-                factory = EstadisticasViewModel.Factory(
-                    app.registroRepository,
-                    app.usuarioRepository,
-                    app.nightscoutRepository
+            val viewModel = statsViewModel
+            if (viewModel != null) {
+                EstadisticasScreen(
+                    viewModel = viewModel,
+                    modifier = Modifier
+                        .padding(innerPadding)
+                        .fillMaxSize()
                 )
-            )
-            EstadisticasScreen(
-                viewModel = viewModel,
-                modifier = Modifier
-                    .padding(innerPadding)
-                    .fillMaxSize()
-            )
+            }
         } else {
             HorizontalPager(
                 state = pagerState,
@@ -403,7 +421,7 @@ fun DiabetesNavGraph(app: DiabetesApp) {
                         )
                         NuevaComidaScreen(
                             viewModel = viewModel,
-                            currentGlucoseMgdl = (nsState as? NightscoutUiState.Success)?.entry?.sgv,
+                            currentGlucoseEntry = (nsState as? NightscoutUiState.Success)?.entry,
                             tabChangeSignal = pagerState.currentPage,
                             onNavigateToProfile = {
                                 coroutineScope.launch {
@@ -425,7 +443,8 @@ fun DiabetesNavGraph(app: DiabetesApp) {
                                 app.plantillaRepository,
                                 app.usuarioRepository,
                                 app.nightscoutTreatmentTombstoneRepository,
-                                app.nightscoutRepository
+                                app.nightscoutRepository,
+                                WorkManager.getInstance(app)
                             )
                         )
                         HistorialScreen(viewModel = viewModel)
