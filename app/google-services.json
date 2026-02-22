@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "610104975812",
+    "project_id": "diabetesia-6fcdc",
+    "storage_bucket": "diabetesia-6fcdc.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:610104975812:android:bfbd5bc36922b4e98ac491",
+        "android_client_info": {
+          "package_name": "com.diabetes.calculator"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCg-TJmHOW9EqCqJMEhFJfmzhBAg63-W7A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

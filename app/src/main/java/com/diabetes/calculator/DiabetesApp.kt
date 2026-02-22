@@ -1,8 +1,10 @@
 package com.diabetes.calculator
 
 import android.app.Application
+import android.util.Log
 import com.diabetes.calculator.data.database.AppDatabase
 import com.diabetes.calculator.data.repository.AlimentoRepository
+import com.diabetes.calculator.data.repository.GeminiRepository
 import com.diabetes.calculator.data.repository.NightscoutTreatmentTombstoneRepository
 import com.diabetes.calculator.data.repository.PendingGlucoseRepository
 import com.diabetes.calculator.data.repository.PlantillaRepository
@@ -14,6 +16,10 @@ import com.diabetes.calculator.util.BackupManager
 import com.diabetes.calculator.util.NightscoutTokenStore
 import com.diabetes.calculator.work.AutoBackupWorker
 import com.diabetes.calculator.work.NightscoutSyncWorker
+import com.google.firebase.Firebase
+import com.google.firebase.appcheck.AppCheckProviderFactory
+import com.google.firebase.appcheck.FirebaseAppCheck
+import com.google.firebase.initialize
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
@@ -54,9 +60,11 @@ class DiabetesApp : Application() {
     // Managers
     val backupManager: BackupManager by lazy { BackupManager(database, nightscoutTokenStore) }
     val nightscoutRepository: NightscoutRepository by lazy { NightscoutRepository() }
+    val geminiRepository: GeminiRepository by lazy { GeminiRepository() }
 
     override fun onCreate() {
         super.onCreate()
+        initializeFirebaseAi()
         CoroutineScope(Dispatchers.IO).launch {
             val workManager = WorkManager.getInstance(this@DiabetesApp)
             scheduleAutoBackup(workManager)
@@ -72,6 +80,35 @@ class DiabetesApp : Application() {
             if (profile?.nightscoutSyncRegistrosActivo == true) {
                 NightscoutSyncWorker.enqueueNow(workManager)
             }
+        }
+    }
+
+    private fun initializeFirebaseAi() {
+        runCatching {
+            Firebase.initialize(context = this)
+            installAppCheckProviderFactory()
+        }.onFailure { error ->
+            Log.w(TAG, "No se pudo inicializar Firebase AI", error)
+        }
+    }
+
+    private fun installAppCheckProviderFactory() {
+        val providerClassName = if (BuildConfig.DEBUG) {
+            DEBUG_APP_CHECK_PROVIDER
+        } else {
+            PLAY_INTEGRITY_PROVIDER
+        }
+
+        val providerFactory = runCatching {
+            val providerClass = Class.forName(providerClassName)
+            val getInstanceMethod = providerClass.getMethod("getInstance")
+            getInstanceMethod.invoke(null)
+        }.getOrNull()
+
+        if (providerFactory is AppCheckProviderFactory) {
+            FirebaseAppCheck.getInstance().installAppCheckProviderFactory(providerFactory)
+        } else {
+            Log.w(TAG, "No se pudo instalar App Check provider: $providerClassName")
         }
     }
 
@@ -106,8 +143,13 @@ class DiabetesApp : Application() {
     }
 
     companion object {
+        private const val TAG = "DiabetesApp"
         private const val INIT_PREFS = "app_init"
         private const val KEY_FOOD_SEED_VERSION = "food_seed_version"
         private const val CURRENT_FOOD_SEED_VERSION = 1
+        private const val PLAY_INTEGRITY_PROVIDER =
+            "com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory"
+        private const val DEBUG_APP_CHECK_PROVIDER =
+            "com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory"
     }
 }

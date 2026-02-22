@@ -9,6 +9,7 @@ import com.diabetes.calculator.data.entity.TipoMedicionAlimento
 import com.diabetes.calculator.data.entity.estadoFisicoNormalizado
 import com.diabetes.calculator.data.entity.tipoMedicionNormalizado
 import com.diabetes.calculator.data.repository.AlimentoRepository
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,8 +17,12 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 /**
  * Estados posibles de la pantalla de alimentos.
@@ -38,6 +43,7 @@ class AlimentosViewModel(
 
     companion object {
         const val UNIDAD_PERSONALIZADA = "__PERSONALIZADO__"
+        private const val SEARCH_DEBOUNCE_MS = 180L
         val UNIDADES_RAPIDAS = listOf(
             "pieza",
             "rebanada",
@@ -113,10 +119,13 @@ class AlimentosViewModel(
     /**
      * Observa alimentos y filtros de búsqueda con un único collector.
      */
-    @OptIn(ExperimentalCoroutinesApi::class)
+    @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
     private fun observeAlimentos() {
         viewModelScope.launch {
             _searchQuery
+                .map { it.trim() }
+                .debounce(SEARCH_DEBOUNCE_MS)
+                .distinctUntilChanged()
                 .flatMapLatest { query ->
                     if (query.isBlank()) {
                         repository.alimentos
@@ -173,12 +182,12 @@ class AlimentosViewModel(
         _editingAlimento.value = alimento
         _dialogNombre.value = alimento.nombre
         _dialogHidratos100g.value = if (alimento.hidratosPor100g % 1f == 0f) {
-            String.format("%.0f", alimento.hidratosPor100g)
+            String.format(Locale.getDefault(), "%.0f", alimento.hidratosPor100g)
         } else {
-            String.format("%.1f", alimento.hidratosPor100g)
+            String.format(Locale.getDefault(), "%.1f", alimento.hidratosPor100g)
         }
         _dialogHidratos100ml.value = alimento.hidratosPor100ml?.let {
-            if (it % 1f == 0f) String.format("%.0f", it) else String.format("%.1f", it)
+            if (it % 1f == 0f) String.format(Locale.getDefault(), "%.0f", it) else String.format(Locale.getDefault(), "%.1f", it)
         } ?: ""
         _dialogTipoMedicion.value = alimento.tipoMedicionNormalizado()
         _dialogEstadoFisico.value = alimento.estadoFisicoNormalizado()
@@ -194,10 +203,10 @@ class AlimentosViewModel(
             _dialogUnidadCustom.value = ""
         }
         _dialogGramosPorUnidad.value = alimento.gramosPorUnidad?.let {
-            if (it % 1f == 0f) String.format("%.0f", it) else String.format("%.1f", it)
+            if (it % 1f == 0f) String.format(Locale.getDefault(), "%.0f", it) else String.format(Locale.getDefault(), "%.1f", it)
         } ?: ""
         _dialogMlPorUnidad.value = alimento.mlPorUnidad?.let {
-            if (it % 1f == 0f) String.format("%.0f", it) else String.format("%.1f", it)
+            if (it % 1f == 0f) String.format(Locale.getDefault(), "%.0f", it) else String.format(Locale.getDefault(), "%.1f", it)
         } ?: ""
         _dialogFuente.value = alimento.fuente
         _dialogNota.value = alimento.nota ?: ""

@@ -191,10 +191,24 @@ object FactoresContextoInsulina {
         unidadesCorreccion: Float,
         factorTotalAplicado: Float
     ): ResultadoDosisContextual {
-        val totalSinCorreccion = roundToHalf((unidadesComida * factorTotalAplicado).coerceAtLeast(0f))
-        val totalConCorreccion = roundToHalf(
-            ((unidadesComida + unidadesCorreccion) * factorTotalAplicado).coerceAtLeast(0f)
+        val raw = applyFactorToDosesRaw(
+            unidadesComida = unidadesComida,
+            unidadesCorreccion = unidadesCorreccion,
+            factorTotalAplicado = factorTotalAplicado
         )
+        return ResultadoDosisContextual(
+            totalConCorreccion = roundToHalf(raw.totalConCorreccion),
+            totalSinCorreccion = roundToHalf(raw.totalSinCorreccion)
+        )
+    }
+
+    fun applyFactorToDosesRaw(
+        unidadesComida: Float,
+        unidadesCorreccion: Float,
+        factorTotalAplicado: Float
+    ): ResultadoDosisContextual {
+        val totalSinCorreccion = (unidadesComida * factorTotalAplicado).coerceAtLeast(0f)
+        val totalConCorreccion = ((unidadesComida + unidadesCorreccion) * factorTotalAplicado).coerceAtLeast(0f)
         return ResultadoDosisContextual(
             totalConCorreccion = totalConCorreccion,
             totalSinCorreccion = totalSinCorreccion

@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -5,6 +7,25 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+val hasGoogleServicesJson = file("google-services.json").exists()
+
+val localProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.inputStream().use(::load)
+    }
+}
+
+fun escapeBuildConfig(value: String): String = value
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+
+val geminiModel: String = (
+    localProperties.getProperty("GEMINI_MODEL")
+        ?: System.getenv("GEMINI_MODEL")
+        ?: "gemini-2.5-flash"
+    ).trim()
 
 android {
     namespace = "com.diabetes.calculator"
@@ -18,6 +39,11 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField(
+            "String",
+            "GEMINI_MODEL",
+            "\"${escapeBuildConfig(geminiModel)}\""
+        )
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -59,6 +85,7 @@ kotlin {
 dependencies {
     // Core Android
     implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
     implementation("androidx.activity:activity-compose:1.8.2")
     
@@ -84,6 +111,12 @@ dependencies {
     implementation("com.squareup.retrofit2:retrofit:$retrofitVersion")
     implementation("com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter:1.0.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // Firebase (AI Logic + App Check)
+    implementation(platform("com.google.firebase:firebase-bom:34.4.0"))
+    implementation("com.google.firebase:firebase-ai")
+    implementation("com.google.firebase:firebase-appcheck-playintegrity")
+    debugImplementation("com.google.firebase:firebase-appcheck-debug")
     
     // Room Database
     val roomVersion = "2.8.4"
@@ -109,4 +142,10 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+if (hasGoogleServicesJson) {
+    apply(plugin = "com.google.gms.google-services")
+} else {
+    logger.warn("google-services.json no encontrado en /app; Firebase AI no funcionará hasta configurarlo.")
 }

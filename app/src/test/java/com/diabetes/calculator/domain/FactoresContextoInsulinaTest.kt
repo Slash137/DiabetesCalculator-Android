@@ -105,6 +105,17 @@ class FactoresContextoInsulinaTest {
     }
 
     @Test
+    fun `applyFactorToDosesRaw devuelve valores sin redondear y no deja negativos`() {
+        val result = FactoresContextoInsulina.applyFactorToDosesRaw(
+            unidadesComida = 3.1f,
+            unidadesCorreccion = -6f,
+            factorTotalAplicado = 1.2f
+        )
+        assertEquals(3.72f, result.totalSinCorreccion, 0.0001f)
+        assertEquals(0f, result.totalConCorreccion, 0.0001f)
+    }
+
+    @Test
     fun `applyFactorToDoses redondea y no deja negativos`() {
         val result = FactoresContextoInsulina.applyFactorToDoses(
             unidadesComida = 3.1f,

@@ -1,33 +1,65 @@
 package com.diabetes.calculator.ui.screens.estadisticas
 
+import android.widget.Toast
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -35,14 +67,20 @@ import androidx.compose.ui.unit.dp
 import com.diabetes.calculator.ui.theme.HidratosColor
 import com.diabetes.calculator.ui.theme.InsulinaColor
 import com.diabetes.calculator.ui.theme.RacionesColor
+import com.diabetes.calculator.work.Recordatorio2hNotificationHelper
+import kotlinx.coroutines.delay
 import java.util.Locale
 
+private const val DISCLAIMER_TAP_WINDOW_MS = 1_200L
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EstadisticasScreen(
     viewModel: EstadisticasViewModel,
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val informeIaState by viewModel.informeIaState.collectAsState()
     val period by viewModel.period.collectAsState()
     val scrollState = rememberScrollState()
 
@@ -106,6 +144,405 @@ fun EstadisticasScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
         }
+    }
+
+    if (informeIaState is InformeIaUiState.Conversation) {
+        val density = LocalDensity.current
+        val isImeVisible = WindowInsets.ime.getBottom(density) > 0
+        val sheetState = rememberModalBottomSheetState(
+            skipPartiallyExpanded = true,
+            confirmValueChange = { target ->
+                !(isImeVisible && target == SheetValue.Hidden)
+            }
+        )
+        val chatState = (informeIaState as InformeIaUiState.Conversation).chat
+        ModalBottomSheet(
+            onDismissRequest = {
+                if (!isImeVisible) {
+                    viewModel.dismissInformeIa()
+                }
+            },
+            sheetState = sheetState
+        ) {
+            InformeIaBottomSheetContent(
+                chat = chatState,
+                onRefresh = viewModel::refreshInformeIaConversation,
+                onDraftChange = viewModel::updateInformeIaDraft,
+                onSend = viewModel::sendInformeIaMessage
+            )
+        }
+    }
+}
+
+@Composable
+private fun InformeIaBottomSheetContent(
+    chat: InformeIaConversationUi,
+    onRefresh: () -> Unit,
+    onDraftChange: (String) -> Unit,
+    onSend: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .fillMaxHeight(0.94f)
+            .imePadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = chat.title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(
+                onClick = onRefresh,
+                enabled = !chat.isLoading
+            ) {
+                Text("Refrescar conversación")
+            }
+        }
+
+        HorizontalDivider()
+
+        val conversationAreaModifier = Modifier
+            .fillMaxWidth()
+            .weight(1f, fill = true)
+        val conversationListState = rememberLazyListState()
+
+        LaunchedEffect(chat.messages.size, chat.isLoading) {
+            val targetIndex = when {
+                chat.messages.isEmpty() -> null
+                chat.isLoading && chat.messages.lastOrNull()?.role == InformeIaRole.USER ->
+                    chat.messages.lastIndex
+                !chat.isLoading &&
+                    chat.messages.lastOrNull()?.role == InformeIaRole.ASSISTANT &&
+                    chat.messages.size >= 2 &&
+                    chat.messages[chat.messages.lastIndex - 1].role == InformeIaRole.USER ->
+                    chat.messages.lastIndex - 1
+                else -> null
+            }
+            targetIndex?.let { index ->
+                delay(40)
+                conversationListState.animateScrollToItem(index = index)
+            }
+        }
+
+        if (chat.messages.isEmpty() && chat.isLoading) {
+            Box(
+                modifier = conversationAreaModifier,
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        CircularProgressIndicator()
+                        Text(
+                            text = "Analizando tus estadísticas...",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Generando el informe inicial",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = conversationAreaModifier,
+                state = conversationListState,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                itemsIndexed(chat.messages) { _, message ->
+                    InformeIaMessageBubble(message = message)
+                }
+
+                if (chat.isLoading) {
+                    item(key = "ia_typing_indicator") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                                    Text(
+                                        text = "La IA está escribiendo...",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        chat.errorMessage?.let { error ->
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                )
+            ) {
+                Text(
+                    text = error,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(12.dp)
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.Bottom
+        ) {
+            androidx.compose.material3.OutlinedTextField(
+                value = chat.draft,
+                onValueChange = onDraftChange,
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 56.dp, max = 120.dp),
+                enabled = !chat.isLoading,
+                placeholder = { Text("Escribe una pregunta...") }
+            )
+            IconButton(
+                onClick = onSend,
+                enabled = !chat.isLoading && chat.draft.isNotBlank()
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Send,
+                    contentDescription = "Enviar mensaje"
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun InformeIaMessageBubble(message: InformeIaMessage) {
+    val isUser = message.role == InformeIaRole.USER
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(if (isUser) 0.86f else 0.94f),
+            colors = CardDefaults.cardColors(
+                containerColor = if (isUser) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerHigh
+                }
+            )
+        ) {
+            if (isUser) {
+                Text(
+                    text = message.content,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                )
+            } else {
+                MarkdownReport(
+                    text = message.content,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownReport(
+    text: String,
+    modifier: Modifier = Modifier
+) {
+    val codeBackground = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+    val lines = remember(text) { text.replace("\r\n", "\n").split('\n') }
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        lines.forEach { rawLine ->
+            val line = rawLine.trimEnd()
+            when {
+                line.isBlank() -> Spacer(modifier = Modifier.height(4.dp))
+                line.startsWith("### ") -> {
+                    Text(
+                        text = markdownInline(line.removePrefix("### ").trim(), codeBackground),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                line.startsWith("## ") -> {
+                    Text(
+                        text = markdownInline(line.removePrefix("## ").trim(), codeBackground),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                line.startsWith("# ") -> {
+                    Text(
+                        text = markdownInline(line.removePrefix("# ").trim(), codeBackground),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                line.startsWith("- ") || line.startsWith("* ") -> {
+                    MarkdownListRow(
+                        marker = "•",
+                        content = line.drop(2).trim(),
+                        codeBackground = codeBackground
+                    )
+                }
+
+                line.matches(Regex("^\\d+[.)]\\s+.*")) -> {
+                    val marker = line.takeWhile { it.isDigit() } + "."
+                    val content = line.replaceFirst(Regex("^\\d+[.)]\\s+"), "").trim()
+                    MarkdownListRow(
+                        marker = marker,
+                        content = content,
+                        codeBackground = codeBackground
+                    )
+                }
+
+                line.startsWith("> ") -> {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                        )
+                    ) {
+                        Text(
+                            text = markdownInline(line.removePrefix("> ").trim(), codeBackground),
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                        )
+                    }
+                }
+
+                else -> {
+                    Text(
+                        text = markdownInline(line.trim(), codeBackground),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownListRow(
+    marker: String,
+    content: String,
+    codeBackground: Color
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Text(
+            text = marker,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            text = markdownInline(content, codeBackground),
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+private fun markdownInline(
+    text: String,
+    codeBackground: Color
+): AnnotatedString {
+    val builder = AnnotatedString.Builder()
+    var index = 0
+
+    while (index < text.length) {
+        val boldStart = text.indexOf("**", startIndex = index).takeIf { it >= 0 }
+        val codeStart = text.indexOf('`', startIndex = index).takeIf { it >= 0 }
+        val nextStart = listOfNotNull(boldStart, codeStart).minOrNull()
+
+        if (nextStart == null) {
+            builder.append(text.substring(index))
+            break
+        }
+
+        if (nextStart > index) {
+            builder.append(text.substring(index, nextStart))
+        }
+
+        if (boldStart == nextStart) {
+            val end = text.indexOf("**", startIndex = nextStart + 2)
+            if (end > nextStart + 2) {
+                val spanStart = builder.length
+                builder.append(text.substring(nextStart + 2, end))
+                builder.addStyle(
+                    style = SpanStyle(fontWeight = FontWeight.SemiBold),
+                    start = spanStart,
+                    end = builder.length
+                )
+                index = end + 2
+            } else {
+                builder.append("**")
+                index = nextStart + 2
+            }
+        } else {
+            val end = text.indexOf('`', startIndex = nextStart + 1)
+            if (end > nextStart + 1) {
+                val spanStart = builder.length
+                builder.append(text.substring(nextStart + 1, end))
+                builder.addStyle(
+                    style = SpanStyle(
+                        fontFamily = FontFamily.Monospace,
+                        background = codeBackground
+                    ),
+                    start = spanStart,
+                    end = builder.length
+                )
+                index = end + 1
+            } else {
+                builder.append("`")
+                index = nextStart + 1
+            }
+        }
+    }
+
+    return buildAnnotatedString {
+        append(builder.toAnnotatedString())
     }
 }
 
@@ -222,6 +659,10 @@ private fun EmptyStatsCard(period: StatsPeriod) {
 
 @Composable
 private fun StatsContent(resumen: EstadisticasResumen) {
+    val context = LocalContext.current
+    var disclaimerTapCount by remember { mutableIntStateOf(0) }
+    var lastDisclaimerTapAtMillis by remember { mutableLongStateOf(0L) }
+
     SectionCard(title = "Resumen") {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -530,6 +971,21 @@ private fun StatsContent(resumen: EstadisticasResumen) {
         textAlign = TextAlign.Center,
         modifier = Modifier
             .fillMaxWidth()
+            .clickable {
+                val nowMillis = System.currentTimeMillis()
+                disclaimerTapCount = if (nowMillis - lastDisclaimerTapAtMillis > DISCLAIMER_TAP_WINDOW_MS) {
+                    1
+                } else {
+                    disclaimerTapCount + 1
+                }
+                lastDisclaimerTapAtMillis = nowMillis
+                if (disclaimerTapCount >= 5) {
+                    disclaimerTapCount = 0
+                    lastDisclaimerTapAtMillis = 0L
+                    Recordatorio2hNotificationHelper.showTestNotificationNow(context)
+                    Toast.makeText(context, "Notificación de prueba enviada", Toast.LENGTH_SHORT).show()
+                }
+            }
             .padding(top = 4.dp)
     )
 }

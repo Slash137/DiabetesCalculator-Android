@@ -4,12 +4,12 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
-import android.media.ExifInterface
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
+import androidx.exifinterface.media.ExifInterface
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -1306,8 +1306,8 @@ private fun hidratosResumen(alimento: Alimento): String {
 
 private fun formatDecimal(value: Float): String {
     return if (value % 1f == 0f) {
-        String.format("%.0f", value)
+        String.format(Locale.getDefault(), "%.0f", value)
     } else {
-        String.format("%.1f", value)
+        String.format(Locale.getDefault(), "%.1f", value)
     }
 }

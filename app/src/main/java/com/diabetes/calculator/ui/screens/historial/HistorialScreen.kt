@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.*
@@ -70,6 +71,12 @@ private val HistorialInsulinaColor = Color(0xFFF57C00)
 private val HistorialRacionesColor = Color(0xFF2196F3)
 private val HistorialWarningColor = Color(0xFFFF9800)
 private const val ACTIVE_INSULIN_WINDOW_MILLIS = ACTIVE_INSULIN_DURATION_MINUTES * 60_000L
+private const val GLUCOSE_STABLE_DELTA_THRESHOLD_MGDL = 10
+
+private fun activeInsulinVisualIntensity(intensity: Float): Float {
+    val normalized = intensity.coerceIn(0f, 1f)
+    return normalized * normalized
+}
 
 @Composable
 private fun HistorialMedicalNotice(modifier: Modifier = Modifier) {
@@ -123,16 +130,26 @@ fun HistorialScreen(
     val listState = rememberLazyListState()
     val nowMillis by rememberCurrentTimeTicker()
     val successRegistros = (uiState as? HistorialUiState.Success)?.registros.orEmpty()
-    val activeInsulinStatesByRegistroId = remember(uiState, nowMillis) {
-        successRegistros.associate { registro ->
-            registro.registro.id to activeInsulinCardStateNow(
-                registro = registro.registro,
-                nowMillis = nowMillis
-            )
-        }
+    val activeInsulinStatesByRegistroId = remember(successRegistros, nowMillis) {
+        val earliestRelevantMillis = nowMillis - ACTIVE_INSULIN_WINDOW_MILLIS
+        successRegistros
+            .asSequence()
+            .map { it.registro }
+            .filter { registro ->
+                if (EstadoDosis.fromValue(registro.dosisEstado) != EstadoDosis.APLICADA) return@filter false
+                val eventTime = registro.dosisConfirmadaAt ?: registro.fecha
+                eventTime > earliestRelevantMillis && eventTime < nowMillis
+            }
+            .mapNotNull { registro ->
+                activeInsulinCardStateNow(
+                    registro = registro,
+                    nowMillis = nowMillis
+                )?.let { registro.id to it }
+            }
+            .toMap()
     }
     val activeDoseCount = remember(activeInsulinStatesByRegistroId) {
-        activeInsulinStatesByRegistroId.values.count { it != null }
+        activeInsulinStatesByRegistroId.size
     }
     val detailActiveInsulinState = detailRegistro
         ?.let { activeInsulinStatesByRegistroId[it.registro.id] }
@@ -536,13 +553,18 @@ private fun HistorialList(
             .groupBy { DateUtils.getStartOfDay(it.registro.fecha) }
             .toSortedMap(compareByDescending { it })
     }
-    val displayItems = buildList {
-        grouped.forEach { (dayStart, registrosDia) ->
-            add(HistorialListItem.Header(dayStart))
-            val isExpanded = expandedDays[dayStart] ?: true
-            if (isExpanded) {
-                registrosDia.forEach { registro ->
-                    add(HistorialListItem.Registro(registro))
+
+    val displayItems by remember(grouped) {
+        derivedStateOf {
+            buildList {
+                grouped.forEach { (dayStart, registrosDia) ->
+                    add(HistorialListItem.Header(dayStart))
+                    val isExpanded = expandedDays[dayStart] ?: true
+                    if (isExpanded) {
+                        registrosDia.forEach { registro ->
+                            add(HistorialListItem.Registro(registro))
+                        }
+                    }
                 }
             }
         }
@@ -644,6 +666,7 @@ private fun RegistroCard(
     val estadoDosis = EstadoDosis.fromValue(registro.registro.dosisEstado)
     val insulinBreakdown = calculateInsulinBreakdown(registro)
     val activeIntensity = activeInsulinState?.intensity?.coerceIn(0f, 1f) ?: 0f
+    val visualActiveIntensity = activeInsulinVisualIntensity(activeIntensity)
     val hasActiveInsulin = activeInsulinState != null
     val nightscoutState = nightscoutSyncState(
         origenRegistro = origenRegistro,
@@ -654,12 +677,12 @@ private fun RegistroCard(
     val highlightedCardColor = lerp(
         start = baseCardColor,
         stop = MaterialTheme.colorScheme.primaryContainer,
-        fraction = 0.14f + (0.24f * activeIntensity)
+        fraction = 0.08f + (0.52f * visualActiveIntensity)
     )
     val activeCardInnerSurface = lerp(
         start = highlightedCardColor,
         stop = MaterialTheme.colorScheme.surface,
-        fraction = 0.12f
+        fraction = 0.18f - (0.10f * visualActiveIntensity)
     )
     val activeChipLabelColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.88f)
     val activeHidratosValueColor = lerp(HistorialHidratosColor, MaterialTheme.colorScheme.onSurface, 0.34f)
@@ -680,7 +703,7 @@ private fun RegistroCard(
         border = if (hasActiveInsulin) {
             BorderStroke(
                 1.25.dp,
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.14f + (0.18f * activeIntensity))
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f + (0.26f * visualActiveIntensity))
             )
         } else {
             null
@@ -728,7 +751,7 @@ private fun RegistroCard(
                                 shape = RoundedCornerShape(999.dp)
                             ) {
                                 Text(
-                                    text = "${String.format("%.1f", registro.registro.unidadesInsulina)} U",
+                                    text = "${String.format(Locale.getDefault(), "%.1f", registro.registro.unidadesInsulina)} U",
                                     style = MaterialTheme.typography.labelLarge,
                                     fontWeight = FontWeight.SemiBold,
                                     color = HistorialInsulinaColor,
@@ -769,7 +792,7 @@ private fun RegistroCard(
                                 shape = RoundedCornerShape(999.dp)
                             ) {
                                 Text(
-                                    text = "${String.format("%.1f", registro.registro.unidadesInsulina)} U",
+                                    text = "${String.format(Locale.getDefault(), "%.1f", registro.registro.unidadesInsulina)} U",
                                     style = MaterialTheme.typography.labelLarge,
                                     fontWeight = FontWeight.SemiBold,
                                     color = HistorialInsulinaColor,
@@ -897,7 +920,7 @@ private fun RegistroCard(
                         DataChip(
                             modifier = Modifier.weight(1f),
                             label = "HIDRATOS",
-                            value = "${String.format("%.1f", registro.registro.hidratosTotales)}g",
+                            value = "${String.format(Locale.getDefault(), "%.1f", registro.registro.hidratosTotales)}g",
                             color = HistorialHidratosColor,
                             containerColorOverride = if (hasActiveInsulin) activeCardInnerSurface else null,
                             labelColorOverride = if (hasActiveInsulin) activeChipLabelColor else null,
@@ -907,7 +930,7 @@ private fun RegistroCard(
                         DataChip(
                             modifier = Modifier.weight(1f),
                             label = "RACIONES",
-                            value = String.format("%.1f", registro.registro.racionesCalculadas),
+                            value = String.format(Locale.getDefault(), "%.1f", registro.registro.racionesCalculadas),
                             color = HistorialRacionesColor,
                             containerColorOverride = if (hasActiveInsulin) activeCardInnerSurface else null,
                             labelColorOverride = if (hasActiveInsulin) activeChipLabelColor else null,
@@ -917,7 +940,7 @@ private fun RegistroCard(
                         DataChip(
                             modifier = Modifier.weight(1.2f),
                             label = "INSULINA",
-                            value = "${String.format("%.1f", insulinBreakdown.total)} U",
+                            value = "${String.format(Locale.getDefault(), "%.1f", insulinBreakdown.total)} U",
                             color = HistorialInsulinaColor,
                             containerColorOverride = if (hasActiveInsulin) activeCardInnerSurface else null,
                             labelColorOverride = if (hasActiveInsulin) activeChipLabelColor else null,
@@ -1040,7 +1063,7 @@ private fun RegistroDetalleBottomSheet(
                 DataChip(
                     modifier = Modifier.fillMaxWidth(),
                     label = "DOSIS",
-                    value = "${String.format("%.1f", registro.registro.unidadesInsulina)} U",
+                    value = "${String.format(Locale.getDefault(), "%.1f", registro.registro.unidadesInsulina)} U",
                     color = HistorialInsulinaColor,
                     isMain = true
                 )
@@ -1065,6 +1088,10 @@ private fun RegistroDetalleBottomSheet(
                 StatDetailRow(
                     label = "2h después",
                     value = registro.registro.glucosaDespues2hMgdl?.let { "$it mg/dL" } ?: "Pendiente"
+                )
+                GlucoseTrendRow(
+                    glucosaAntesMgdl = registro.registro.glucosaAntesMgdl,
+                    glucosaDespues2hMgdl = registro.registro.glucosaDespues2hMgdl
                 )
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -1108,7 +1135,7 @@ private fun RegistroDetalleBottomSheet(
                 DataChip(
                     modifier = Modifier.fillMaxWidth(),
                     label = "DOSIS",
-                    value = "${String.format("%.1f", insulinBreakdown.total)} U",
+                    value = "${String.format(Locale.getDefault(), "%.1f", insulinBreakdown.total)} U",
                     color = HistorialInsulinaColor,
                     isMain = true
                 )
@@ -1120,21 +1147,21 @@ private fun RegistroDetalleBottomSheet(
                     DataChip(
                         modifier = Modifier.weight(1f),
                         label = "HIDRATOS",
-                        value = "${String.format("%.1f", registro.registro.hidratosTotales)}g",
+                        value = "${String.format(Locale.getDefault(), "%.1f", registro.registro.hidratosTotales)}g",
                         color = HistorialHidratosColor,
                         isMain = true
                     )
                     DataChip(
                         modifier = Modifier.weight(1f),
                         label = "RACIONES",
-                        value = String.format("%.1f", registro.registro.racionesCalculadas),
+                        value = String.format(Locale.getDefault(), "%.1f", registro.registro.racionesCalculadas),
                         color = HistorialRacionesColor,
                         isMain = true
                     )
                     DataChip(
                         modifier = Modifier.weight(1.2f),
                         label = "INSULINA",
-                        value = "${String.format("%.1f", insulinBreakdown.total)} U",
+                        value = "${String.format(Locale.getDefault(), "%.1f", insulinBreakdown.total)} U",
                         color = HistorialInsulinaColor,
                         isMain = true
                     )
@@ -1324,6 +1351,10 @@ private fun RegistroDetalleBottomSheet(
                 StatDetailRow(
                     label = "2h después",
                     value = glucosaDespues?.let { "$it mg/dL" } ?: "Pendiente"
+                )
+                GlucoseTrendRow(
+                    glucosaAntesMgdl = glucosaAntes,
+                    glucosaDespues2hMgdl = glucosaDespues
                 )
             }
 
@@ -1538,7 +1569,7 @@ private fun ActiveInsulinSourceChip(
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
-                text = "${String.format(Locale.getDefault(), "%.1f", activeUnits)} U activas · $doseCount dosis · ${minutesRemaining} min restantes",
+                text = "${String.format(Locale.getDefault(), "%.1f", activeUnits)} U activas · ${minutesRemaining} min restantes",
                 style = MaterialTheme.typography.labelMedium,
                 color = color,
                 fontWeight = FontWeight.Medium
@@ -1666,6 +1697,68 @@ private fun StatDetailRow(
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.SemiBold
         )
+    }
+}
+
+@Composable
+private fun GlucoseTrendRow(
+    glucosaAntesMgdl: Int?,
+    glucosaDespues2hMgdl: Int?
+) {
+    if (glucosaAntesMgdl == null || glucosaDespues2hMgdl == null) {
+        StatDetailRow(label = "Tendencia 2h", value = "Pendiente")
+        return
+    }
+
+    val delta = glucosaDespues2hMgdl - glucosaAntesMgdl
+    val (icon, label, color) = when {
+        delta >= GLUCOSE_STABLE_DELTA_THRESHOLD_MGDL -> Triple(
+            Icons.Default.TrendingUp,
+            "Sube",
+            MaterialTheme.colorScheme.error
+        )
+
+        delta <= -GLUCOSE_STABLE_DELTA_THRESHOLD_MGDL -> Triple(
+            Icons.Default.TrendingDown,
+            "Baja",
+            MaterialTheme.colorScheme.primary
+        )
+
+        else -> Triple(
+            Icons.Default.TrendingFlat,
+            "Estable",
+            MaterialTheme.colorScheme.tertiary
+        )
+    }
+
+    val deltaText = if (delta >= 0) "+$delta" else delta.toString()
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "Tendencia 2h",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(16.dp)
+            )
+            Text(
+                text = "$label ($deltaText mg/dL)",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = color
+            )
+        }
     }
 }
 
@@ -1815,7 +1908,7 @@ private fun doseStatusIcon(estado: EstadoDosis) = when (estado) {
 private fun doseCorrectionIcon(conCorreccion: Boolean?) = when (conCorreccion) {
     true -> Icons.Default.Add
     false -> Icons.Default.Remove
-    null -> Icons.Default.HelpOutline
+    null -> Icons.AutoMirrored.Filled.HelpOutline
 }
 
 @Composable
@@ -1916,8 +2009,8 @@ private fun buildRatioText(
             val ratioPorRacion = ratioHc * gramosPorRacion
             val formatU = if (ratioPorRacion >= 10f) "%.0f" else "%.1f"
             val formatG = if ((1f / ratioHc) >= 10f) "%.0f" else "%.2f"
-            val uPorRacionText = String.format(formatU, ratioPorRacion)
-            val gramosPorUnidadText = String.format(formatG, 1f / ratioHc)
+            val uPorRacionText = String.format(Locale.getDefault(), formatU, ratioPorRacion)
+            val gramosPorUnidadText = String.format(Locale.getDefault(), formatG, 1f / ratioHc)
             parts += "1 ración/$uPorRacionText U"
             parts += "1 U/$gramosPorUnidadText g"
         }
@@ -2102,9 +2195,9 @@ private fun highSeverityColor(colors: ColorScheme): androidx.compose.ui.graphics
 private fun formatFactorCorreccion(value: Float): String {
     val isInteger = kotlin.math.abs(value - value.toInt().toFloat()) < 0.05f
     return if (isInteger) {
-        String.format("%.0f", value)
+        String.format(Locale.getDefault(), "%.0f", value)
     } else {
-        String.format("%.1f", value)
+        String.format(Locale.getDefault(), "%.1f", value)
     }
 }
 
@@ -2120,7 +2213,7 @@ private fun cantidadConsumidaLabel(
         else -> "g"
     }
     val isInteger = kotlin.math.abs(cantidad - cantidad.toInt().toFloat()) < 0.05f
-    val valor = if (isInteger) String.format("%.0f", cantidad) else String.format("%.1f", cantidad)
+    val valor = if (isInteger) String.format(Locale.getDefault(), "%.0f", cantidad) else String.format(Locale.getDefault(), "%.1f", cantidad)
     return "$valor $unidad"
 }
 
@@ -2167,10 +2260,10 @@ private fun calculateInsulinBreakdown(
     )
 }
 
-private fun formatUnits(value: Float): String = "${String.format("%.1f", value)} U"
+private fun formatUnits(value: Float): String = "${String.format(Locale.getDefault(), "%.1f", value)} U"
 
 private fun formatSignedUnits(value: Float): String {
-    val magnitude = String.format("%.1f", kotlin.math.abs(value))
+    val magnitude = String.format(Locale.getDefault(), "%.1f", kotlin.math.abs(value))
     return if (value >= 0f) "+$magnitude U" else "-$magnitude U"
 }
 
@@ -2215,9 +2308,9 @@ private fun buildItemMetricsText(
     insulina: Float?,
     separatorColor: androidx.compose.ui.graphics.Color
 ): androidx.compose.ui.text.AnnotatedString {
-    val rText = raciones?.let { String.format("%.2f", it) } ?: "N/D"
-    val uText = insulina?.let { String.format("%.2f", it) } ?: "N/D"
-    val hText = "${String.format("%.1f", hidratos)} g HC"
+    val rText = raciones?.let { String.format(Locale.getDefault(), "%.2f", it) } ?: "N/D"
+    val uText = insulina?.let { String.format(Locale.getDefault(), "%.2f", it) } ?: "N/D"
+    val hText = "${String.format(Locale.getDefault(), "%.1f", hidratos)} g HC"
 
     return buildAnnotatedString {
         withStyle(SpanStyle(color = HistorialHidratosColor)) {
