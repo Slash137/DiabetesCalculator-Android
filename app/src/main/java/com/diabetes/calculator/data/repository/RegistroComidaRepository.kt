@@ -8,8 +8,59 @@ import com.diabetes.calculator.data.entity.OrigenRegistro
 import com.diabetes.calculator.data.entity.RegistroComida
 import com.diabetes.calculator.domain.ACTIVE_INSULIN_DURATION_MINUTES
 import com.diabetes.calculator.domain.ActiveInsulinCalculator
+import com.diabetes.calculator.domain.ActiveInsulinDoseEvent
 import com.diabetes.calculator.domain.ActiveInsulinSnapshot
+import com.diabetes.calculator.domain.LocalInjectionCandidate
+import com.diabetes.calculator.domain.NightscoutReconciliation
+import com.diabetes.calculator.domain.RemoteInjectionCandidate
+import kotlin.math.abs
 import kotlinx.coroutines.flow.Flow
+
+internal fun mergeHybridIobCandidates(
+    localCandidates: List<LocalInjectionCandidate>,
+    remoteCandidates: List<RemoteInjectionCandidate>,
+    maxDeltaMinutes: Int = 10,
+    maxDeltaUnits: Float = 0.3f
+): List<ActiveInsulinDoseEvent> {
+    if (remoteCandidates.isEmpty()) {
+        return localCandidates.map {
+            ActiveInsulinDoseEvent(
+                units = it.units,
+                eventMillis = it.timestampMillis
+            )
+        }
+    }
+    val reconcile = NightscoutReconciliation.reconcile(
+        locals = localCandidates,
+        remotes = remoteCandidates,
+        maxDeltaMinutes = maxDeltaMinutes,
+        maxDeltaUnits = maxDeltaUnits
+    )
+    val authoritativeRemotes = buildList {
+        addAll(reconcile.matches.map { it.remote })
+        addAll(reconcile.unmatchedRemotes)
+    }.distinctBy { it.treatmentId }
+    val provisionalLocals = reconcile.unmatchedLocals
+
+    return buildList {
+        authoritativeRemotes.forEach { remote ->
+            add(
+                ActiveInsulinDoseEvent(
+                    units = remote.units,
+                    eventMillis = remote.timestampMillis
+                )
+            )
+        }
+        provisionalLocals.forEach { local ->
+            add(
+                ActiveInsulinDoseEvent(
+                    units = local.units,
+                    eventMillis = local.timestampMillis
+                )
+            )
+        }
+    }
+}
 
 /**
  * Repositorio para la gestión de registros de comida.
@@ -81,10 +132,62 @@ class RegistroComidaRepository(private val dao: RegistroComidaDao) {
     suspend fun sumInsulinaInRange(start: Long, end: Long): Float =
         dao.sumInsulinaInRange(start, end)
 
-    suspend fun getActiveInsulinSnapshot(nowMillis: Long): ActiveInsulinSnapshot {
+    suspend fun getAppliedDosesInWindow(
+        fromMillis: Long,
+        toMillis: Long
+    ): List<RegistroComida> = dao.getAppliedDosesInWindow(fromMillis, toMillis)
+
+    suspend fun getActiveInsulinSnapshot(
+        nowMillis: Long,
+        nightscoutRepository: NightscoutRepository? = null,
+        nightscoutUrl: String? = null,
+        nightscoutToken: String? = null
+    ): ActiveInsulinSnapshot {
         val fromMillis = nowMillis - (ACTIVE_INSULIN_DURATION_MINUTES * 60_000L)
-        val dosis = dao.getReliableAppliedDosesInWindow(fromMillis, nowMillis)
-        return ActiveInsulinCalculator.calculate(dosis, nowMillis)
+        val localDoses = dao.getAppliedDosesInWindow(fromMillis, nowMillis)
+        val localEvents = localDoses.mapNotNull { registro ->
+            val units = resolveIobLocalDoseUnits(registro)
+            if (!units.isFinite() || units <= 0f) return@mapNotNull null
+            ActiveInsulinDoseEvent(
+                units = units,
+                eventMillis = registro.dosisConfirmadaAt ?: registro.fecha
+            )
+        }
+
+        val baseUrl = nightscoutUrl?.trim().orEmpty()
+        if (nightscoutRepository == null || baseUrl.isBlank()) {
+            return ActiveInsulinCalculator.calculateFromEvents(localEvents, nowMillis)
+        }
+
+        val remoteCandidates = fetchRemoteCandidates(
+            nightscoutRepository = nightscoutRepository,
+            nightscoutUrl = baseUrl,
+            nightscoutToken = nightscoutToken,
+            fromMillis = fromMillis,
+            toMillis = nowMillis
+        )
+        if (remoteCandidates.isEmpty()) {
+            return ActiveInsulinCalculator.calculateFromEvents(localEvents, nowMillis)
+        }
+
+        val localCandidates = localDoses.mapNotNull { registro ->
+            val units = resolveIobLocalDoseUnits(registro)
+            if (!units.isFinite() || units <= 0f) return@mapNotNull null
+            LocalInjectionCandidate(
+                registroId = registro.id,
+                timestampMillis = registro.dosisConfirmadaAt ?: registro.fecha,
+                units = units,
+                dcid = registro.nightscoutSyncDcid
+            )
+        }
+
+        val mergedHybridEvents = mergeHybridIobCandidates(
+            localCandidates = localCandidates,
+            remoteCandidates = remoteCandidates,
+            maxDeltaMinutes = HYBRID_IOB_MATCH_DELTA_MINUTES,
+            maxDeltaUnits = HYBRID_IOB_MATCH_DELTA_UNITS
+        )
+        return ActiveInsulinCalculator.calculateFromEvents(mergedHybridEvents, nowMillis)
     }
 
     suspend fun getRegistroRawById(id: Int): RegistroComida? = dao.getRegistroRawById(id)
@@ -147,4 +250,72 @@ class RegistroComidaRepository(private val dao: RegistroComidaDao) {
      * Obtiene registros raw para backup.
      */
     suspend fun getAllRegistrosRaw(): List<RegistroComida> = dao.getAllRegistrosRaw()
+
+    private suspend fun fetchRemoteCandidates(
+        nightscoutRepository: NightscoutRepository,
+        nightscoutUrl: String,
+        nightscoutToken: String?,
+        fromMillis: Long,
+        toMillis: Long
+    ): List<RemoteInjectionCandidate> {
+        val treatments = nightscoutRepository.getTreatmentsInRangeAll(
+            baseUrl = nightscoutUrl,
+            token = nightscoutToken,
+            fromMillis = fromMillis,
+            toMillis = toMillis
+        ).mapNotNull { treatment ->
+            val timestamp = nightscoutRepository.resolveTreatmentMillis(treatment)
+                ?: return@mapNotNull null
+            val units = nightscoutRepository.resolveTreatmentInsulinUnits(treatment)
+                ?: return@mapNotNull null
+            if (!units.isFinite() || units <= 0f || timestamp !in fromMillis..toMillis) return@mapNotNull null
+            val id = treatment.id?.takeIf { it.isNotBlank() }
+                ?: "treat:${timestamp}:${String.format("%.2f", units)}"
+            RemoteInjectionCandidate(
+                treatmentId = id,
+                timestampMillis = timestamp,
+                units = units
+            )
+        }
+
+        val rawEntries = nightscoutRepository.getFastInsulinEntriesInRangeAll(
+            baseUrl = nightscoutUrl,
+            token = nightscoutToken,
+            fromMillis = fromMillis,
+            toMillis = toMillis
+        ).mapNotNull { entry ->
+            val timestamp = nightscoutRepository.resolveEntryMillis(entry) ?: return@mapNotNull null
+            val units = nightscoutRepository.resolveEntryInsulinUnits(entry) ?: return@mapNotNull null
+            if (!units.isFinite() || units <= 0f || timestamp !in fromMillis..toMillis) return@mapNotNull null
+            val id = entry.id?.takeIf { it.isNotBlank() }
+                ?: "entry:${timestamp}:${String.format("%.2f", units)}"
+            RemoteInjectionCandidate(
+                treatmentId = id,
+                timestampMillis = timestamp,
+                units = units
+            )
+        }
+
+        if (treatments.isEmpty()) return rawEntries.distinctBy { it.treatmentId }
+        val merged = treatments.toMutableList()
+        rawEntries.forEach { raw ->
+            val duplicate = treatments.any { treatment ->
+                abs(treatment.timestampMillis - raw.timestampMillis) <= (HYBRID_IOB_MATCH_DELTA_MINUTES * 60_000L) &&
+                    abs(treatment.units - raw.units) <= HYBRID_IOB_MATCH_DELTA_UNITS
+            }
+            if (!duplicate) merged += raw
+        }
+        return merged.distinctBy { it.treatmentId }
+    }
+
+    private fun resolveIobLocalDoseUnits(registro: RegistroComida): Float {
+        return registro.unidadesInsulina
+            .takeIf { it.isFinite() && it > 0f }
+            ?: 0f
+    }
+
+    companion object {
+        private const val HYBRID_IOB_MATCH_DELTA_MINUTES = 10
+        private const val HYBRID_IOB_MATCH_DELTA_UNITS = 0.3f
+    }
 }

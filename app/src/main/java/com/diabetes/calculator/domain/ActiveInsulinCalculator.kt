@@ -11,21 +11,39 @@ data class ActiveInsulinSnapshot(
     val minutesToZero: Int? = null
 )
 
+data class ActiveInsulinDoseEvent(
+    val units: Float,
+    val eventMillis: Long
+)
+
 object ActiveInsulinCalculator {
 
     fun calculate(
         registros: List<RegistroComida>,
         nowMillis: Long
     ): ActiveInsulinSnapshot {
+        val events = registros.map {
+            ActiveInsulinDoseEvent(
+                units = it.unidadesInsulina,
+                eventMillis = it.dosisConfirmadaAt ?: it.fecha
+            )
+        }
+        return calculateFromEvents(events, nowMillis)
+    }
+
+    fun calculateFromEvents(
+        events: List<ActiveInsulinDoseEvent>,
+        nowMillis: Long
+    ): ActiveInsulinSnapshot {
         var total = 0f
         var count = 0
         var maxRemainingMinutes = 0
 
-        registros.forEach { registro ->
-            val units = registro.unidadesInsulina
+        events.forEach { event ->
+            val units = event.units
             if (!units.isFinite() || units <= 0f) return@forEach
 
-            val eventMillis = registro.dosisConfirmadaAt ?: registro.fecha
+            val eventMillis = event.eventMillis
             val elapsed = nowMillis - eventMillis
             if (elapsed <= 0L || elapsed >= ACTIVE_INSULIN_DURATION_MILLIS) return@forEach
 

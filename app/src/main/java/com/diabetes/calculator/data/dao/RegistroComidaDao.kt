@@ -53,6 +53,20 @@ interface RegistroComidaDao {
         SELECT *
         FROM registro_comida
         WHERE dosisEstado = 'applied'
+          AND COALESCE(dosisConfirmadaAt, fecha) BETWEEN :fromMillis AND :toMillis
+        ORDER BY COALESCE(dosisConfirmadaAt, fecha) DESC
+        """
+    )
+    suspend fun getAppliedDosesInWindow(
+        fromMillis: Long,
+        toMillis: Long
+    ): List<RegistroComida>
+
+    @Query(
+        """
+        SELECT *
+        FROM registro_comida
+        WHERE dosisEstado = 'applied'
           AND (
                 origenRegistro = 'NIGHTSCOUT_IMPORT'
                 OR (nightscoutTreatmentId IS NOT NULL AND nightscoutTreatmentId != '')

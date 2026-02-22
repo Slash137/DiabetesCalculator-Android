@@ -132,6 +132,22 @@ class NightscoutRepository {
         }
     }
 
+    suspend fun getRecentGlucoseEntries(
+        baseUrl: String,
+        token: String?,
+        count: Int = 3
+    ): List<NightscoutEntry> {
+        return try {
+            val safeCount = count.coerceIn(1, 24)
+            val entries = ensureApi(baseUrl).getRecentEntries(count = safeCount, token = token)
+            lastErrorMessage = null
+            entries
+        } catch (e: Exception) {
+            lastErrorMessage = formatError(e)
+            emptyList()
+        }
+    }
+
     /**
      * Obtiene el valor de glucosa más cercano a un timestamp dentro de una tolerancia.
      */
