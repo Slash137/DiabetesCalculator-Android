@@ -1,8 +1,11 @@
 package com.diabetes.calculator.data.repository
 
+import com.diabetes.calculator.data.dao.LegacyLibreviewDeleteLink
 import com.diabetes.calculator.data.entity.EstadoDosis
 import com.diabetes.calculator.data.entity.OrigenRegistro
 import com.diabetes.calculator.data.entity.RegistroComida
+import com.diabetes.calculator.data.entity.RegistroLibreviewSyncChannel
+import com.diabetes.calculator.data.entity.RegistroLibreviewSyncOperation
 import com.diabetes.calculator.data.entity.RegistroNightscoutSync
 import com.diabetes.calculator.data.entity.RegistroNightscoutSyncStatus
 import com.diabetes.calculator.data.entity.UsuarioProfile
@@ -12,10 +15,13 @@ import com.diabetes.calculator.data.model.NightscoutTreatment
 import com.diabetes.calculator.domain.LocalInjectionCandidate
 import com.diabetes.calculator.domain.NightscoutReconciliation
 import com.diabetes.calculator.domain.RemoteInjectionCandidate
+import com.diabetes.calculator.domain.SyncLinkTolerance
 import com.diabetes.calculator.util.NightscoutRetryPolicy
 import java.time.Instant
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.absoluteValue
+import kotlin.math.max
 import kotlin.math.round
 
 data class NightscoutSyncRunResult(
@@ -24,17 +30,125 @@ data class NightscoutSyncRunResult(
     val maxFailedAttempts: Int = 0
 )
 
+internal fun shouldUploadDoseOnlyLocalToNightscout(
+    registro: RegistroComida,
+    effectiveUnits: Float
+): Boolean {
+    if (EstadoDosis.fromValue(registro.dosisEstado) != EstadoDosis.APLICADA) return false
+    if (!effectiveUnits.isFinite() || effectiveUnits <= 0f) return false
+    return registro.hidratosTotales <= 0f && registro.racionesCalculadas <= 0f
+}
+
+internal fun scoreLocalKeeper(registro: RegistroComida): Int {
+    var score = 0
+    if (registro.hidratosTotales > 0f || registro.racionesCalculadas > 0f) score += 1_000
+    if (!isNovoPenNfcRegistroLocal(registro)) score += 400
+    if (registro.libreviewInsulinRecordNumber != null || registro.libreviewCarbsRecordNumber != null) score += 200
+    if (!registro.nightscoutTreatmentId.isNullOrBlank()) score += 100
+    if (registro.glucosaAntesMgdl != null || registro.glucosaDespues2hMgdl != null) score += 50
+    return score
+}
+
+internal fun choosePreferredLocalKeeper(cluster: List<RegistroComida>): RegistroComida {
+    return cluster
+        .sortedWith(
+            compareByDescending<RegistroComida> { scoreLocalKeeper(it) }
+                .thenBy { it.id }
+        )
+        .first()
+}
+
+internal fun resolvePreferredTreatmentIdForCluster(
+    cluster: List<RegistroComida>,
+    keeper: RegistroComida
+): String? {
+    return keeper.nightscoutTreatmentId?.takeIf { it.isNotBlank() }
+        ?: cluster
+            .asSequence()
+            .filter { it.id != keeper.id }
+            .sortedWith(
+                compareByDescending<RegistroComida> { scoreLocalKeeper(it) }
+                    .thenBy { it.id }
+            )
+            .mapNotNull { it.nightscoutTreatmentId?.takeIf { id -> id.isNotBlank() } }
+            .firstOrNull()
+}
+
+internal fun hasDuplicatePair(
+    registro: RegistroComida,
+    candidates: List<RegistroComida>,
+    toleranceMillis: Long,
+    toleranceUnits: Float
+): Boolean {
+    if (candidates.isEmpty()) return false
+    val timestamp = resolveComparableTimestampForDuplicate(registro)
+    val units = resolveComparableUnitsForDuplicate(registro)
+    if (!units.isFinite() || units <= 0f) return false
+    return candidates.any { candidate ->
+        if (candidate.id == registro.id) return@any false
+        val candidateUnits = resolveComparableUnitsForDuplicate(candidate)
+        if (!candidateUnits.isFinite() || candidateUnits <= 0f) return@any false
+        val candidateTimestamp = resolveComparableTimestampForDuplicate(candidate)
+        val withinTimeWindow = abs(candidateTimestamp - timestamp) <= toleranceMillis
+        if (!withinTimeWindow) return@any false
+        val withinUnitsWindow = abs(candidateUnits - units) <= toleranceUnits
+        withinUnitsWindow || isMealAndNfcCanonicalPair(registro, candidate)
+    }
+}
+
+internal fun isMealAndNfcCanonicalPair(
+    first: RegistroComida,
+    second: RegistroComida
+): Boolean {
+    val firstIsNfc = isNovoPenNfcRegistroLocal(first)
+    val secondIsNfc = isNovoPenNfcRegistroLocal(second)
+    if (firstIsNfc == secondIsNfc) return false
+
+    val nfc = if (firstIsNfc) first else second
+    val meal = if (firstIsNfc) second else first
+    if (OrigenRegistro.fromValue(nfc.origenRegistro) != OrigenRegistro.LOCAL) return false
+    if (OrigenRegistro.fromValue(meal.origenRegistro) != OrigenRegistro.LOCAL) return false
+    if (EstadoDosis.fromValue(meal.dosisEstado) == EstadoDosis.OMITIDA) return false
+
+    val hasMealCarbs = meal.hidratosTotales > 0f || meal.racionesCalculadas > 0f
+    if (!hasMealCarbs) return false
+
+    val nfcUnits = resolveComparableUnitsForDuplicate(nfc)
+    return nfcUnits.isFinite() && nfcUnits > 0f
+}
+
+private fun resolveComparableTimestampForDuplicate(registro: RegistroComida): Long {
+    return registro.dosisConfirmadaAt ?: registro.fecha
+}
+
+private fun resolveComparableUnitsForDuplicate(registro: RegistroComida): Float {
+    val remote = registro.unidadesInsulinaRemota
+        ?.takeIf { it.isFinite() && it > 0f }
+    if (remote != null) return remote
+    val local = registro.unidadesInsulina
+    return if (local.isFinite() && local > 0f) local else 0f
+}
+
+private fun isNovoPenNfcRegistroLocal(registro: RegistroComida): Boolean {
+    val dcid = registro.nightscoutSyncDcid?.trim().orEmpty()
+    if (dcid.startsWith("nfc-")) return true
+    val notes = registro.notas?.trim().orEmpty()
+    return notes.contains("[NovoPen NFC]", ignoreCase = true)
+}
+
 class NightscoutRegistrosSyncService(
     private val registroRepository: RegistroComidaRepository,
     private val queueRepository: RegistroNightscoutSyncRepository,
     private val tombstoneRepository: NightscoutTreatmentTombstoneRepository,
-    private val nightscoutRepository: NightscoutRepository
+    private val nightscoutRepository: NightscoutRepository,
+    private val libreviewQueueRepository: RegistroLibreviewSyncRepository? = null
 ) {
     companion object {
         private const val GLUCOSE_TOLERANCE_MINUTES = 15
         private const val TWO_HOURS_MILLIS = 2L * 60L * 60L * 1000L
-        private const val ALIAS_MATCH_MAX_MILLIS = 2L * 60L * 1000L
-        private const val ALIAS_MATCH_MAX_UNITS = 0.2f
+        private const val REQUIRED_LINK_WINDOW_MINUTES = SyncLinkTolerance.WINDOW_MINUTES
+        private const val REQUIRED_LINK_WINDOW_UNITS = SyncLinkTolerance.WINDOW_UNITS
+        private const val DCID_LOOKUP_WINDOW_MILLIS = 24L * 60L * 60L * 1000L
     }
 
     suspend fun sync(
@@ -43,18 +157,24 @@ class NightscoutRegistrosSyncService(
         toMillis: Long,
         ignoreTombstones: Boolean,
         enqueueAllLocalRecords: Boolean = false,
-        enqueueFromMillis: Long? = null
+        enqueueFromMillis: Long? = null,
+        fullHistoricalReconcile: Boolean = false
     ): NightscoutSyncRunResult {
         val url = profile.nightscoutUrl?.trim().orEmpty()
         if (url.isBlank()) return NightscoutSyncRunResult()
 
         val now = System.currentTimeMillis()
+        processPendingRemoteDeletes(
+            baseUrl = url,
+            token = profile.nightscoutToken
+        )
         importAndReconcileRemote(
             profile = profile,
             fromMillis = fromMillis,
             toMillis = toMillis,
             ignoreTombstones = ignoreTombstones,
-            now = now
+            now = now,
+            fullHistoricalReconcile = fullHistoricalReconcile
         )
 
         if (enqueueAllLocalRecords || enqueueFromMillis != null) {
@@ -66,8 +186,46 @@ class NightscoutRegistrosSyncService(
             )
         }
 
-        return uploadPendingLocals(
+        val runResult = uploadPendingLocals(
             profile = profile,
+            now = now
+        )
+        processPendingRemoteDeletes(
+            baseUrl = url,
+            token = profile.nightscoutToken
+        )
+        return runResult
+    }
+
+    suspend fun reconcileLocalDuplicatesOnly(
+        now: Long = System.currentTimeMillis(),
+        linkOffsetMinutes: Int = SyncLinkTolerance.WINDOW_MINUTES,
+        linkOffsetUnits: Float = SyncLinkTolerance.WINDOW_UNITS
+    ) {
+        val toleranceMinutes = max(
+            linkOffsetMinutes.coerceIn(0, 180),
+            REQUIRED_LINK_WINDOW_MINUTES
+        )
+        val toleranceUnits = max(
+            linkOffsetUnits.coerceIn(0f, 5f),
+            REQUIRED_LINK_WINDOW_UNITS
+        )
+        val toleranceMillis = toleranceMinutes * 60_000L
+
+        val initial = registroRepository.getAllRegistrosRaw()
+        if (initial.isEmpty()) return
+
+        mergeLocalAppAndNfcDuplicates(
+            localRegistros = initial,
+            toleranceMillis = toleranceMillis,
+            toleranceUnits = toleranceUnits,
+            now = now
+        )
+
+        cleanupImportedNightscoutAliases(
+            localRegistros = registroRepository.getAllRegistrosRaw(),
+            toleranceMillis = toleranceMillis,
+            toleranceUnits = toleranceUnits,
             now = now
         )
     }
@@ -87,7 +245,11 @@ class NightscoutRegistrosSyncService(
 
         candidatos.forEach { registro ->
             if (registro.origenRegistro != OrigenRegistro.LOCAL.value) return@forEach
-            if (registro.hidratosTotales <= 0f) return@forEach
+            if (!shouldUploadLocalRegistro(registro)) return@forEach
+            if (!registro.nightscoutTreatmentId.isNullOrBlank()) {
+                queueRepository.markSyncedNoUpload(registro.id, now)
+                return@forEach
+            }
             val currentStatus = queueRepository
                 .getByRegistroId(registro.id)
                 ?.let { RegistroNightscoutSyncStatus.fromValue(it.status) }
@@ -101,23 +263,31 @@ class NightscoutRegistrosSyncService(
         fromMillis: Long,
         toMillis: Long,
         ignoreTombstones: Boolean,
-        now: Long
+        now: Long,
+        fullHistoricalReconcile: Boolean
     ) {
         val url = profile.nightscoutUrl?.trim().orEmpty()
         val token = profile.nightscoutToken
         if (url.isBlank()) return
 
-        val toleranceMinutes = profile.nightscoutLinkOffsetMinutes.coerceIn(0, 180)
-        val toleranceUnits = profile.nightscoutLinkOffsetUnits.coerceIn(0f, 5f)
+        val toleranceMinutes = max(
+            profile.nightscoutLinkOffsetMinutes.coerceIn(0, 180),
+            REQUIRED_LINK_WINDOW_MINUTES
+        )
+        val toleranceUnits = max(
+            profile.nightscoutLinkOffsetUnits.coerceIn(0f, 5f),
+            REQUIRED_LINK_WINDOW_UNITS
+        )
         val toleranceMillis = toleranceMinutes * 60_000L
-        val aliasMatchMillis = minOf(toleranceMillis, ALIAS_MATCH_MAX_MILLIS)
-        val aliasMatchUnits = minOf(toleranceUnits, ALIAS_MATCH_MAX_UNITS)
+        val aliasMatchMillis = toleranceMillis
+        val aliasMatchUnits = toleranceUnits
         val remotes = fetchRemoteCandidates(
             baseUrl = url,
             token = token,
             fromMillis = fromMillis,
             toMillis = toMillis
         )
+        val remoteByTreatmentId = remotes.associateBy { it.treatmentId }
 
         var localRegistros = registroRepository.getRegistrosInRangeRaw(
             from = fromMillis - toleranceMillis,
@@ -141,8 +311,19 @@ class NightscoutRegistrosSyncService(
             )
         }
         if (remotes.isEmpty()) {
+            val mergeScopeRegistros = if (fullHistoricalReconcile) {
+                registroRepository.getAllRegistrosRaw()
+            } else {
+                localRegistros
+            }
+            mergeLocalAppAndNfcDuplicates(
+                localRegistros = mergeScopeRegistros,
+                toleranceMillis = toleranceMillis,
+                toleranceUnits = toleranceUnits,
+                now = now
+            )
             cleanupImportedNightscoutAliases(
-                localRegistros = localRegistros,
+                localRegistros = mergeScopeRegistros,
                 toleranceMillis = aliasMatchMillis,
                 toleranceUnits = aliasMatchUnits,
                 now = now
@@ -212,10 +393,6 @@ class NightscoutRegistrosSyncService(
                 if (existing.origenRegistro != OrigenRegistro.NIGHTSCOUT_IMPORT.value) continue
             }
             if (!ignoreTombstones && tombstoneRepository.exists(remote.treatmentId)) continue
-            if (!remote.dcid.isNullOrBlank()) {
-                tombstoneRepository.add(remote.treatmentId, now)
-                continue
-            }
             pendingRemotes += remote
         }
 
@@ -271,11 +448,13 @@ class NightscoutRegistrosSyncService(
         }
 
         dcidMatches.forEach { (local, remote) ->
-            val linked = linkLocalWithRemote(
-                registroId = local.registroId,
-                remote = remote,
-                reconciledAt = now,
-                importedDuplicateId = localByTreatmentId[remote.treatmentId]
+                val linked = linkLocalWithRemote(
+                    registroId = local.registroId,
+                    remote = remote,
+                    reconciledAt = now,
+                    duplicateCheckMillis = aliasMatchMillis,
+                    duplicateCheckUnits = aliasMatchUnits,
+                    importedDuplicateId = localByTreatmentId[remote.treatmentId]
                     ?.takeIf { it.origenRegistro == OrigenRegistro.NIGHTSCOUT_IMPORT.value }
                     ?.id ?: findImportedDuplicateIdForRemote(
                     remote,
@@ -300,11 +479,13 @@ class NightscoutRegistrosSyncService(
         }
 
         reconcile.matches.forEach { match ->
-            val linked = linkLocalWithRemote(
-                registroId = match.local.registroId,
-                remote = match.remote,
-                reconciledAt = now,
-                importedDuplicateId = localByTreatmentId[match.remote.treatmentId]
+                val linked = linkLocalWithRemote(
+                    registroId = match.local.registroId,
+                    remote = match.remote,
+                    reconciledAt = now,
+                    duplicateCheckMillis = aliasMatchMillis,
+                    duplicateCheckUnits = aliasMatchUnits,
+                    importedDuplicateId = localByTreatmentId[match.remote.treatmentId]
                     ?.takeIf { it.origenRegistro == OrigenRegistro.NIGHTSCOUT_IMPORT.value }
                     ?.id ?: findImportedDuplicateIdForRemote(
                     match.remote,
@@ -353,6 +534,8 @@ class NightscoutRegistrosSyncService(
                     registroId = nearLocal.registroId,
                     remote = remote,
                     reconciledAt = now,
+                    duplicateCheckMillis = aliasMatchMillis,
+                    duplicateCheckUnits = aliasMatchUnits,
                     importedDuplicateId = localByTreatmentId[remote.treatmentId]
                         ?.takeIf { it.origenRegistro == OrigenRegistro.NIGHTSCOUT_IMPORT.value }
                         ?.id ?: findImportedDuplicateIdForRemote(
@@ -384,21 +567,31 @@ class NightscoutRegistrosSyncService(
             }
             if (nearLinkedLocal != null) {
                 val currentLinkedTreatmentId = linkedLocalTreatmentById[nearLinkedLocal.registroId]
-                val remoteIsEntry = remote.treatmentId.startsWith("entry:")
-                val linkedIsEntry = currentLinkedTreatmentId?.startsWith("entry:") == true
-                val linkedLooksAppGenerated = !nearLinkedLocal.dcid.isNullOrBlank()
+                val currentLinkedRemote = currentLinkedTreatmentId?.let { remoteByTreatmentId[it] }
+                val candidateDeltaMillis = abs(nearLinkedLocal.timestampMillis - remote.timestampMillis)
+                val candidateDeltaUnits = abs(nearLinkedLocal.units - remote.units)
+                val currentDeltaMillis = currentLinkedRemote?.let {
+                    abs(nearLinkedLocal.timestampMillis - it.timestampMillis)
+                }
+                val currentDeltaUnits = currentLinkedRemote?.let {
+                    abs(nearLinkedLocal.units - it.units)
+                }
 
                 val shouldRelink = currentLinkedTreatmentId.isNullOrBlank() ||
                     currentLinkedTreatmentId == remote.treatmentId ||
-                    (remoteIsEntry && !linkedIsEntry && linkedLooksAppGenerated) ||
-                    (remoteIsEntry && !linkedIsEntry) ||
-                    (linkedLooksAppGenerated && currentLinkedTreatmentId != remote.treatmentId)
+                    currentLinkedRemote == null ||
+                    currentDeltaMillis == null ||
+                    candidateDeltaMillis < currentDeltaMillis ||
+                    (candidateDeltaMillis == currentDeltaMillis &&
+                        (currentDeltaUnits == null || candidateDeltaUnits <= currentDeltaUnits))
 
                 if (shouldRelink) {
                     val linked = linkLocalWithRemote(
                         registroId = nearLinkedLocal.registroId,
                         remote = remote,
                         reconciledAt = now,
+                        duplicateCheckMillis = toleranceMillis,
+                        duplicateCheckUnits = toleranceUnits,
                         importedDuplicateId = localByTreatmentId[remote.treatmentId]
                             ?.takeIf { it.origenRegistro == OrigenRegistro.NIGHTSCOUT_IMPORT.value }
                             ?.id ?: findImportedDuplicateIdForRemote(
@@ -423,6 +616,9 @@ class NightscoutRegistrosSyncService(
                         )
                     }
                     return@forEach
+                } else {
+                    tombstoneRepository.add(remote.treatmentId, now)
+                    return@forEach
                 }
             }
 
@@ -441,11 +637,24 @@ class NightscoutRegistrosSyncService(
             )
         }
 
-        cleanupImportedNightscoutAliases(
-            localRegistros = registroRepository.getRegistrosInRangeRaw(
+        val mergeScopeRegistros = if (fullHistoricalReconcile) {
+            registroRepository.getAllRegistrosRaw()
+        } else {
+            registroRepository.getRegistrosInRangeRaw(
                 from = fromMillis - toleranceMillis,
                 to = toMillis + toleranceMillis
-            ),
+            )
+        }
+
+        mergeLocalAppAndNfcDuplicates(
+            localRegistros = mergeScopeRegistros,
+            toleranceMillis = toleranceMillis,
+            toleranceUnits = toleranceUnits,
+            now = now
+        )
+
+        cleanupImportedNightscoutAliases(
+            localRegistros = mergeScopeRegistros,
             toleranceMillis = aliasMatchMillis,
             toleranceUnits = aliasMatchUnits,
             now = now
@@ -506,7 +715,7 @@ class NightscoutRegistrosSyncService(
             return
         }
 
-        if (registro.hidratosTotales <= 0f) {
+        if (!shouldUploadLocalRegistro(registro)) {
             queueRepository.markSyncedNoUpload(registro.id, now)
             return
         }
@@ -517,13 +726,69 @@ class NightscoutRegistrosSyncService(
             if (registro.nightscoutSyncDcid.isNullOrBlank()) {
                 registroRepository.updateNightscoutSyncDcid(registro.id, dcid)
             }
-            val notes = buildMealUploadNotes(registro.notas, dcid)
+            val linkedTreatmentId = registro.nightscoutTreatmentId?.takeIf { it.isNotBlank() }
+            if (linkedTreatmentId != null) {
+                findRemoteTreatmentIdsByDcid(
+                    baseUrl = baseUrl,
+                    token = token,
+                    aroundMillis = effectiveTime,
+                    dcid = dcid
+                )
+                    .asSequence()
+                    .filter { it != linkedTreatmentId }
+                    .forEach { duplicateId ->
+                        tombstoneRepository.add(duplicateId, now)
+                    }
+                queueRepository.markSyncedNoUpload(registro.id, now)
+                return
+            }
+            val remoteMatchesByDcid = findRemoteTreatmentIdsByDcid(
+                baseUrl = baseUrl,
+                token = token,
+                aroundMillis = effectiveTime,
+                dcid = dcid
+            )
+            if (remoteMatchesByDcid.isNotEmpty()) {
+                val canonicalTreatmentId = remoteMatchesByDcid.first()
+                val linked = linkLocalWithRemote(
+                    registroId = registro.id,
+                    remote = RemoteInjectionCandidate(
+                        treatmentId = canonicalTreatmentId,
+                        timestampMillis = effectiveTime,
+                        units = resolveFinalLocalDoseUnits(registro).coerceAtLeast(0f),
+                        dcid = dcid
+                    ),
+                    reconciledAt = now,
+                    baseUrl = baseUrl,
+                    token = token,
+                    now = now
+                )
+                if (!linked) {
+                    queueRepository.markFailed(
+                        registro.id,
+                        "Conflicto al enlazar por dcid con Nightscout",
+                        now
+                    )
+                    return
+                }
+                remoteMatchesByDcid
+                    .drop(1)
+                    .forEach { duplicateId ->
+                        tombstoneRepository.add(duplicateId, now)
+                    }
+                queueRepository.markSyncedNoUpload(registro.id, now)
+                return
+            }
+            val payload = buildUploadPayload(registro, dcid) ?: run {
+                queueRepository.markSyncedNoUpload(registro.id, now)
+                return
+            }
             val request = NightscoutCreateTreatmentRequest(
-                eventType = "Carb Correction",
-                insulin = 0f,
-                carbs = registro.hidratosTotales,
+                eventType = payload.eventType,
+                insulin = payload.insulin,
+                carbs = payload.carbs,
                 createdAt = Instant.ofEpochMilli(effectiveTime).toString(),
-                notes = notes
+                notes = payload.notes
             )
             val created = nightscoutRepository.createTreatment(
                 baseUrl = baseUrl,
@@ -543,6 +808,31 @@ class NightscoutRegistrosSyncService(
                 queueRepository.markFailed(registro.id, err, now)
                 return
             }
+
+            val linked = registroRepository.updateNightscoutLink(
+                registroId = registro.id,
+                treatmentId = treatmentId,
+                unidadesInsulinaRemota = payload.insulin
+                    .takeIf { it.isFinite() && it > 0f },
+                reconciliadoAt = now,
+                dcid = dcid
+            )
+            if (linked <= 0) {
+                queueRepository.markFailed(registro.id, "No se pudo enlazar tratamiento Nightscout", now)
+                return
+            }
+
+            findRemoteTreatmentIdsByDcid(
+                baseUrl = baseUrl,
+                token = token,
+                aroundMillis = effectiveTime,
+                dcid = dcid
+            )
+                .asSequence()
+                .filter { it != treatmentId }
+                .forEach { duplicateId ->
+                    tombstoneRepository.add(duplicateId, now)
+                }
 
             queueRepository.markSyncedUpload(registro.id, now)
         } catch (e: Exception) {
@@ -592,54 +882,45 @@ class NightscoutRegistrosSyncService(
         toleranceUnits: Float,
         now: Long
     ) {
-        // Legacy cleanup: remove imported records that likely came from old app-uploaded doses
-        // (we tagged uploads with a dcid in notes).
-        localRegistros
-            .asSequence()
-            .filter { it.origenRegistro == OrigenRegistro.NIGHTSCOUT_IMPORT.value }
-            .filter { !it.nightscoutSyncDcid.isNullOrBlank() }
-            .forEach { imported ->
-                registroRepository.deleteById(imported.id)
-                imported.nightscoutTreatmentId?.takeIf { it.isNotBlank() }?.let { treatmentId ->
-                    tombstoneRepository.add(treatmentId, now)
-                }
-            }
-
-        val localAfterLegacyCleanup = registroRepository.getRegistrosInRangeRaw(
+        val localAfterCleanup = registroRepository.getRegistrosInRangeRaw(
             from = localRegistros.minOfOrNull { it.fecha } ?: 0L,
             to = localRegistros.maxOfOrNull { it.fecha } ?: 0L
         )
 
-        val linkedLocals = localAfterLegacyCleanup.filter { registro ->
+        val linkedLocals = localAfterCleanup.filter { registro ->
             registro.origenRegistro == OrigenRegistro.LOCAL.value &&
-                !registro.nightscoutTreatmentId.isNullOrBlank() &&
-                !registro.nightscoutTreatmentId.startsWith("entry:")
+                !registro.nightscoutTreatmentId.isNullOrBlank()
         }
 
-        val importedAliases = localAfterLegacyCleanup.filter { registro ->
-            registro.origenRegistro == OrigenRegistro.NIGHTSCOUT_IMPORT.value &&
-                registro.nightscoutTreatmentId?.startsWith("entry:") == true
+        val importedAliases = localAfterCleanup.filter { registro ->
+            registro.origenRegistro == OrigenRegistro.NIGHTSCOUT_IMPORT.value
         }
         if (linkedLocals.isNotEmpty() && importedAliases.isNotEmpty()) {
             importedAliases.forEach { imported ->
-                val importedUnits = imported.unidadesInsulinaRemota ?: imported.unidadesInsulina
-                val importedTimestamp = resolveEffectiveTimestamp(imported)
-                val duplicateOfLinkedLocal = linkedLocals.any { local ->
-                    val localUnits = local.unidadesInsulinaRemota ?: local.unidadesInsulina
-                    val localTimestamp = resolveEffectiveTimestamp(local)
-                    abs(localTimestamp - importedTimestamp) <= toleranceMillis &&
-                        abs(localUnits - importedUnits) <= toleranceUnits
-                }
+                val duplicateOfLinkedLocal = hasDuplicatePair(
+                    registro = imported,
+                    candidates = linkedLocals,
+                    toleranceMillis = toleranceMillis,
+                    toleranceUnits = toleranceUnits
+                )
                 if (!duplicateOfLinkedLocal) return@forEach
 
-                registroRepository.deleteById(imported.id)
-                imported.nightscoutTreatmentId?.takeIf { it.isNotBlank() }?.let { treatmentId ->
-                    tombstoneRepository.add(treatmentId, now)
+                val hasAnotherImportedPair = hasDuplicatePair(
+                    registro = imported,
+                    candidates = importedAliases,
+                    toleranceMillis = toleranceMillis,
+                    toleranceUnits = toleranceUnits
+                )
+                if (hasAnotherImportedPair || linkedLocals.isNotEmpty()) {
+                    registroRepository.deleteById(imported.id)
+                    imported.nightscoutTreatmentId?.takeIf { it.isNotBlank() }?.let { treatmentId ->
+                        tombstoneRepository.add(treatmentId, now)
+                    }
                 }
             }
         }
 
-        val importedByTimestamp = localAfterLegacyCleanup
+        val importedByTimestamp = localAfterCleanup
             .asSequence()
             .filter { it.origenRegistro == OrigenRegistro.NIGHTSCOUT_IMPORT.value }
             .filter { !it.nightscoutTreatmentId.isNullOrBlank() }
@@ -676,6 +957,14 @@ class NightscoutRegistrosSyncService(
             cluster
                 .filter { it.id != keeper.id }
                 .forEach { duplicate ->
+                    if (
+                        !hasDuplicatePair(
+                            registro = duplicate,
+                            candidates = cluster,
+                            toleranceMillis = toleranceMillis,
+                            toleranceUnits = toleranceUnits
+                        )
+                    ) return@forEach
                     registroRepository.deleteById(duplicate.id)
                     alreadyDeleted += duplicate.id
                     duplicate.nightscoutTreatmentId?.takeIf { it.isNotBlank() }?.let { treatmentId ->
@@ -685,10 +974,270 @@ class NightscoutRegistrosSyncService(
         }
     }
 
+    private suspend fun mergeLocalAppAndNfcDuplicates(
+        localRegistros: List<RegistroComida>,
+        toleranceMillis: Long,
+        toleranceUnits: Float,
+        now: Long
+    ) {
+        val locals = localRegistros
+            .asSequence()
+            .filter { it.origenRegistro == OrigenRegistro.LOCAL.value }
+            .filter { it.dosisEstado != EstadoDosis.OMITIDA.value }
+            .filter { resolveFinalLocalDoseUnits(it) > 0f }
+            .sortedBy { resolveEffectiveTimestamp(it) }
+            .toList()
+        if (locals.size <= 1) return
+
+        val processed = mutableSetOf<Int>()
+        locals.forEach { base ->
+            if (processed.contains(base.id)) return@forEach
+            val baseTimestamp = resolveEffectiveTimestamp(base)
+            val baseUnits = resolveFinalLocalDoseUnits(base)
+            val cluster = locals.filter { candidate ->
+                if (processed.contains(candidate.id)) return@filter false
+                val candidateTimestamp = resolveEffectiveTimestamp(candidate)
+                if (abs(candidateTimestamp - baseTimestamp) > toleranceMillis) return@filter false
+                val unitsMatch = abs(resolveFinalLocalDoseUnits(candidate) - baseUnits) <= toleranceUnits
+                unitsMatch || isMealAndNfcCanonicalPair(base, candidate)
+            }
+            if (cluster.size <= 1) return@forEach
+
+            if (cluster.size <= 1) return@forEach
+
+            val keeper = choosePreferredLocalKeeper(cluster)
+            val targetTreatmentId = resolvePreferredTreatmentIdForCluster(
+                cluster = cluster,
+                keeper = keeper
+            )
+
+            var keeperUpdated = keeper
+            var canonicalizedByNfc = false
+            val nfcSource = cluster
+                .asSequence()
+                .filter { isNovoPenNfcRegistro(it) }
+                .filter { resolveFinalLocalDoseUnits(it) > 0f }
+                .sortedWith(
+                    compareBy<RegistroComida> {
+                        abs(resolveEffectiveTimestamp(it) - resolveEffectiveTimestamp(keeper))
+                    }.thenBy { it.id }
+                )
+                .firstOrNull()
+
+            if (nfcSource != null) {
+                val canonicalTimestamp = resolveEffectiveTimestamp(nfcSource)
+                val canonicalUnits = resolveFinalLocalDoseUnits(nfcSource)
+                val canonicalDcid = nfcSource.nightscoutSyncDcid
+                    ?.takeIf { it.isNotBlank() }
+                    ?: buildDcid(keeper.id, canonicalTimestamp)
+                val canonicalized = registroRepository.canonicalizeLocalRegistroWithNfcDose(
+                    registroId = keeper.id,
+                    unidades = canonicalUnits,
+                    confirmadaAt = canonicalTimestamp,
+                    dcid = canonicalDcid,
+                    now = now
+                )
+                if (canonicalized != null) {
+                    keeperUpdated = canonicalized.updatedRegistro
+                    canonicalizedByNfc = true
+                    canonicalized.invalidatedNightscoutTreatmentId
+                        ?.takeIf { it.isNotBlank() && it != targetTreatmentId }
+                        ?.let { treatmentId ->
+                            tombstoneRepository.add(treatmentId, now)
+                        }
+                    enqueueLibreviewLegacyDeletes(canonicalized.legacyDeletes, now)
+                }
+            }
+
+            if (
+                !canonicalizedByNfc &&
+                EstadoDosis.fromValue(keeperUpdated.dosisEstado) != EstadoDosis.APLICADA &&
+                cluster.any { isNovoPenNfcRegistro(it) }
+            ) {
+                val bestConfirmation = cluster
+                    .asSequence()
+                    .filter { isNovoPenNfcRegistro(it) }
+                    .map { it.dosisConfirmadaAt ?: it.fecha }
+                    .firstOrNull()
+                    ?: (keeperUpdated.dosisConfirmadaAt ?: keeperUpdated.fecha)
+                registroRepository.updateDosisEstado(
+                    registroId = keeperUpdated.id,
+                    estado = EstadoDosis.APLICADA,
+                    confirmadaAt = bestConfirmation
+                )
+                keeperUpdated = registroRepository.getRegistroRawById(keeperUpdated.id) ?: keeperUpdated
+            }
+
+            if (!targetTreatmentId.isNullOrBlank()) {
+                val owner = cluster.firstOrNull { it.nightscoutTreatmentId == targetTreatmentId }
+                if (owner != null && owner.id != keeperUpdated.id) {
+                    registroRepository.clearNightscoutLink(owner.id)
+                }
+
+                val canonicalDcid = cluster
+                    .asSequence()
+                    .mapNotNull { it.nightscoutSyncDcid?.takeIf { dcid -> dcid.isNotBlank() } }
+                    .firstOrNull()
+                val canonicalRemoteUnits = cluster
+                    .asSequence()
+                    .firstOrNull { it.nightscoutTreatmentId == targetTreatmentId }
+                    ?.let { it.unidadesInsulinaRemota ?: it.unidadesInsulina }
+                val linked = registroRepository.updateNightscoutLink(
+                    registroId = keeperUpdated.id,
+                    treatmentId = targetTreatmentId,
+                    unidadesInsulinaRemota = canonicalRemoteUnits,
+                    reconciliadoAt = now,
+                    dcid = canonicalDcid
+                )
+                if (linked > 0) {
+                    queueRepository.markSyncedNoUpload(keeperUpdated.id, now)
+                }
+            }
+
+            val nfcDcid = cluster
+                .asSequence()
+                .mapNotNull { it.nightscoutSyncDcid }
+                .firstOrNull { it.startsWith("nfc-") }
+            if (!nfcDcid.isNullOrBlank() && keeperUpdated.nightscoutSyncDcid != nfcDcid) {
+                registroRepository.updateNightscoutSyncDcid(keeperUpdated.id, nfcDcid)
+            }
+
+            if (!canonicalizedByNfc && keeperUpdated.libreviewInsulinRecordNumber == null) {
+                val insulinDonor = cluster.firstOrNull {
+                    it.id != keeperUpdated.id && it.libreviewInsulinRecordNumber != null
+                }
+                if (insulinDonor?.libreviewInsulinRecordNumber != null) {
+                    registroRepository.updateLibreviewInsulinLink(
+                        registroId = keeperUpdated.id,
+                        recordNumber = insulinDonor.libreviewInsulinRecordNumber,
+                        payloadHash = insulinDonor.libreviewInsulinPayloadHash,
+                        reconciliadoAt = insulinDonor.libreviewReconciliadoAt ?: now
+                    )
+                }
+            }
+
+            if (!canonicalizedByNfc && keeperUpdated.libreviewCarbsRecordNumber == null) {
+                val carbsDonor = cluster.firstOrNull {
+                    it.id != keeperUpdated.id && it.libreviewCarbsRecordNumber != null
+                }
+                if (carbsDonor?.libreviewCarbsRecordNumber != null) {
+                    registroRepository.updateLibreviewCarbsLink(
+                        registroId = keeperUpdated.id,
+                        recordNumber = carbsDonor.libreviewCarbsRecordNumber,
+                        payloadHash = carbsDonor.libreviewCarbsPayloadHash,
+                        reconciliadoAt = carbsDonor.libreviewReconciliadoAt ?: now
+                    )
+                }
+            }
+
+            cluster
+                .filter { it.id != keeperUpdated.id }
+                .forEach { duplicate ->
+                    if (
+                        !hasDuplicatePair(
+                            registro = duplicate,
+                            candidates = cluster,
+                            toleranceMillis = toleranceMillis,
+                            toleranceUnits = toleranceUnits
+                        )
+                    ) return@forEach
+                    val duplicateTreatmentId = duplicate.nightscoutTreatmentId?.takeIf { it.isNotBlank() }
+                    if (
+                        duplicateTreatmentId != null &&
+                        duplicateTreatmentId != targetTreatmentId
+                    ) {
+                        tombstoneRepository.add(duplicateTreatmentId, now)
+                    }
+                    enqueueLibreviewDeleteForDuplicate(
+                        duplicate = duplicate,
+                        keeper = keeperUpdated,
+                        now = now
+                    )
+                    queueRepository.deleteByRegistroId(duplicate.id)
+                    registroRepository.deleteById(duplicate.id)
+                    processed += duplicate.id
+                }
+
+            processed += keeperUpdated.id
+        }
+    }
+
+    private suspend fun enqueueLibreviewDeleteForDuplicate(
+        duplicate: RegistroComida,
+        keeper: RegistroComida,
+        now: Long
+    ) {
+        val libreviewQueue = libreviewQueueRepository ?: return
+
+        duplicate.libreviewCarbsRecordNumber
+            ?.takeIf { it != keeper.libreviewCarbsRecordNumber }
+            ?.let { recordNumber ->
+                val carbsEventMillis = resolveCarbsTimestampForRecordNumber(
+                    registro = duplicate,
+                    recordNumber = recordNumber,
+                    fallbackTimestamp = duplicate.fecha
+                )
+                libreviewQueue.upsertPending(
+                    registroId = duplicate.id,
+                    channel = RegistroLibreviewSyncChannel.CARBS,
+                    operation = RegistroLibreviewSyncOperation.DELETE,
+                    now = now,
+                    recordNumber = recordNumber,
+                    eventTimestampMillis = carbsEventMillis,
+                    amountValue = 0f,
+                    payloadHash = duplicate.libreviewCarbsPayloadHash
+                )
+            }
+
+        duplicate.libreviewInsulinRecordNumber
+            ?.takeIf { it != keeper.libreviewInsulinRecordNumber }
+            ?.let { recordNumber ->
+                val insulinEventMillis = resolveInsulinTimestampForRecordNumber(
+                    registro = duplicate,
+                    recordNumber = recordNumber,
+                    fallbackTimestamp = resolveEffectiveTimestamp(duplicate)
+                )
+                libreviewQueue.upsertPending(
+                    registroId = duplicate.id,
+                    channel = RegistroLibreviewSyncChannel.NFC_INSULIN,
+                    operation = RegistroLibreviewSyncOperation.DELETE,
+                    now = now,
+                    recordNumber = recordNumber,
+                    eventTimestampMillis = insulinEventMillis,
+                    amountValue = 0f,
+                    payloadHash = duplicate.libreviewInsulinPayloadHash
+                )
+            }
+    }
+
+    private suspend fun enqueueLibreviewLegacyDeletes(
+        legacyDeletes: List<LegacyLibreviewDeleteLink>,
+        now: Long
+    ) {
+        val libreviewQueue = libreviewQueueRepository ?: return
+        legacyDeletes.forEach { delete ->
+            libreviewQueue.upsertPending(
+                registroId = syntheticLibreviewDeleteRegistroId(
+                    channel = delete.channel,
+                    recordNumber = delete.recordNumber
+                ),
+                channel = delete.channel,
+                operation = RegistroLibreviewSyncOperation.DELETE,
+                now = now,
+                recordNumber = delete.recordNumber,
+                eventTimestampMillis = delete.eventTimestampMillis,
+                amountValue = 0f,
+                payloadHash = delete.payloadHash
+            )
+        }
+    }
+
     private suspend fun linkLocalWithRemote(
         registroId: Int,
         remote: RemoteInjectionCandidate,
         reconciledAt: Long,
+        duplicateCheckMillis: Long = SyncLinkTolerance.WINDOW_MILLIS,
+        duplicateCheckUnits: Float = SyncLinkTolerance.WINDOW_UNITS,
         importedDuplicateId: Int? = null,
         baseUrl: String,
         token: String?,
@@ -710,11 +1259,22 @@ class NightscoutRegistrosSyncService(
             .filterNotNull()
             .firstOrNull { it != registroId }
         if (duplicateIdToDelete != null) {
+            val owner = registroRepository.getRegistroRawById(registroId)
             val duplicate = registroRepository.getRegistroRawById(duplicateIdToDelete)
-            registroRepository.deleteById(duplicateIdToDelete)
-            val duplicateTreatmentId = duplicate?.nightscoutTreatmentId?.takeIf { it.isNotBlank() }
-            if (duplicateTreatmentId != null && duplicateTreatmentId != remote.treatmentId) {
-                tombstoneRepository.add(duplicateTreatmentId, now)
+            val canDeleteDuplicate = owner != null &&
+                duplicate != null &&
+                hasDuplicatePair(
+                    registro = duplicate,
+                    candidates = listOf(owner),
+                    toleranceMillis = duplicateCheckMillis,
+                    toleranceUnits = duplicateCheckUnits
+                )
+            if (canDeleteDuplicate) {
+                registroRepository.deleteById(duplicateIdToDelete)
+                val duplicateTreatmentId = duplicate?.nightscoutTreatmentId?.takeIf { it.isNotBlank() }
+                if (duplicateTreatmentId != null && duplicateTreatmentId != remote.treatmentId) {
+                    tombstoneRepository.add(duplicateTreatmentId, now)
+                }
             }
         }
 
@@ -853,25 +1413,9 @@ class NightscoutRegistrosSyncService(
             toMillis = toMillis
         ).mapNotNull { treatmentToCandidate(it) }
 
-        val merged = (fromEntries + fromTreatments)
+        return (fromEntries + fromTreatments)
             .distinctBy { it.treatmentId }
-            .groupBy { remote ->
-                val minute = remote.timestampMillis / 60_000L
-                val units = String.format(Locale.US, "%.2f", remote.units)
-                "$minute|$units"
-            }
-            .map { (_, candidates) ->
-                candidates.minWithOrNull(
-                    compareBy<RemoteInjectionCandidate>(
-                        { if (it.dcid.isNullOrBlank()) 0 else 1 },
-                        { if (it.treatmentId.startsWith("entry:")) 0 else 1 },
-                        { it.timestampMillis },
-                        { it.treatmentId }
-                    )
-                ) ?: candidates.first()
-            }
-
-        return merged.sortedBy { it.timestampMillis }
+            .sortedBy { it.timestampMillis }
     }
 
     private suspend fun findRemoteTreatmentIdByDcid(
@@ -880,22 +1424,46 @@ class NightscoutRegistrosSyncService(
         aroundMillis: Long,
         dcid: String
     ): String? {
-        val toleranceMillis = NightscoutReconciliation.MAX_DELTA_MINUTES * 60_000L
-        val from = aroundMillis - toleranceMillis
-        val to = aroundMillis + toleranceMillis
+        return findRemoteTreatmentIdsByDcid(
+            baseUrl = baseUrl,
+            token = token,
+            aroundMillis = aroundMillis,
+            dcid = dcid
+        ).firstOrNull()
+    }
+
+    private suspend fun findRemoteTreatmentIdsByDcid(
+        baseUrl: String,
+        token: String?,
+        aroundMillis: Long,
+        dcid: String
+    ): List<String> {
+        if (dcid.isBlank()) return emptyList()
+        val from = aroundMillis - DCID_LOOKUP_WINDOW_MILLIS
+        val to = aroundMillis + DCID_LOOKUP_WINDOW_MILLIS
         val remotes = nightscoutRepository.getTreatmentsInRangeAll(
             baseUrl = baseUrl,
             token = token,
             fromMillis = from,
             toMillis = to
         )
-        val candidate = remotes.firstOrNull { treatment ->
-            val id = treatment.id ?: return@firstOrNull false
-            val notes = treatment.notes.orEmpty()
-            val sameDcid = notes.contains("dcid=$dcid")
-            sameDcid && !id.isBlank()
-        }
-        return candidate?.id
+        return remotes
+            .asSequence()
+            .mapNotNull { treatment ->
+                val id = treatment.id?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val notes = treatment.notes.orEmpty()
+                if (!notes.contains("dcid=$dcid")) return@mapNotNull null
+                val millis = nightscoutRepository.resolveTreatmentMillis(treatment) ?: aroundMillis
+                Triple(id, abs(millis - aroundMillis), millis)
+            }
+            .distinctBy { it.first }
+            .sortedWith(
+                compareBy<Triple<String, Long, Long>> { it.second }
+                    .thenBy { it.third }
+                    .thenBy { it.first }
+            )
+            .map { it.first }
+            .toList()
     }
 
     /**
@@ -933,6 +1501,73 @@ class NightscoutRegistrosSyncService(
 
     private fun roundToHalf(value: Float): Float = round(value * 2f) / 2f
 
+    private data class UploadPayload(
+        val eventType: String,
+        val insulin: Float,
+        val carbs: Float?,
+        val notes: String
+    )
+
+    private fun buildUploadPayload(
+        registro: RegistroComida,
+        dcid: String
+    ): UploadPayload? {
+        val carbs = registro.hidratosTotales
+            .takeIf { it.isFinite() && it > 0f }
+        if (carbs != null) {
+            val appliedMealDose = if (EstadoDosis.fromValue(registro.dosisEstado) == EstadoDosis.APLICADA) {
+                resolveFinalLocalDoseUnits(registro)
+                    .takeIf { it.isFinite() && it > 0f }
+            } else {
+                null
+            }
+            return UploadPayload(
+                eventType = if (appliedMealDose != null) "Meal Bolus" else "Carb Correction",
+                insulin = appliedMealDose ?: 0f,
+                carbs = carbs,
+                notes = buildMealUploadNotes(registro.notas, dcid)
+            )
+        }
+
+        val insulinUnits = resolveFinalLocalDoseUnits(registro)
+        if (!shouldUploadDoseOnlyLocalToNightscout(registro, insulinUnits)) return null
+        return UploadPayload(
+            eventType = "Correction Bolus",
+            insulin = insulinUnits,
+            carbs = null,
+            notes = buildDoseUploadNotes(registro.notas, dcid)
+        )
+    }
+
+    private fun shouldUploadLocalRegistro(registro: RegistroComida): Boolean {
+        val hasCarbs = registro.hidratosTotales.isFinite() && registro.hidratosTotales > 0f
+        if (hasCarbs) return true
+        val effectiveUnits = resolveFinalLocalDoseUnits(registro)
+        return shouldUploadDoseOnlyLocalToNightscout(registro, effectiveUnits)
+    }
+
+    private fun isNovoPenNfcRegistro(registro: RegistroComida): Boolean {
+        return isNovoPenNfcRegistroLocal(registro)
+    }
+
+    private suspend fun processPendingRemoteDeletes(
+        baseUrl: String,
+        token: String?
+    ) {
+        val tombstones = tombstoneRepository.getAllTreatmentIds()
+        if (tombstones.isEmpty()) return
+        tombstones.forEach { treatmentId ->
+            val deleted = nightscoutRepository.deleteByTreatmentOrEntryId(
+                baseUrl = baseUrl,
+                token = token,
+                treatmentId = treatmentId
+            )
+            if (deleted) {
+                tombstoneRepository.delete(treatmentId)
+            }
+        }
+    }
+
     private fun buildMealUploadNotes(existing: String?, dcid: String): String {
         val cleanExisting = existing?.trim().orEmpty()
         return if (cleanExisting.isBlank()) {
@@ -942,8 +1577,26 @@ class NightscoutRegistrosSyncService(
         }
     }
 
+    private fun buildDoseUploadNotes(existing: String?, dcid: String): String {
+        val cleanExisting = existing?.trim().orEmpty()
+        return if (cleanExisting.isBlank()) {
+            "[DiabetesCalculator dose] dcid=$dcid"
+        } else {
+            "[DiabetesCalculator dose] dcid=$dcid · $cleanExisting"
+        }
+    }
+
     private fun buildDcid(registroId: Int, timestampMillis: Long): String {
         return "reg-$registroId-$timestampMillis"
+    }
+
+    private fun syntheticLibreviewDeleteRegistroId(
+        channel: RegistroLibreviewSyncChannel,
+        recordNumber: Long
+    ): Int {
+        val mixed = ((recordNumber xor (recordNumber ushr 32)).toInt()) xor channel.value.hashCode()
+        val normalized = mixed.absoluteValue.coerceAtLeast(1)
+        return -normalized
     }
 
     private fun extractDcid(notes: String?): String? {

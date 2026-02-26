@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -59,6 +61,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
@@ -70,6 +74,7 @@ import androidx.core.content.ContextCompat
 import android.content.pm.PackageManager
 import com.diabetes.calculator.ui.components.AvisoMedico
 import com.diabetes.calculator.ui.screens.NightscoutStatus
+import com.diabetes.calculator.data.repository.LibreviewRegistrosSyncSummary
 import com.diabetes.calculator.data.repository.NightscoutRegistrosSyncSummary
 import com.diabetes.calculator.util.BackupPasswordStore
 import com.diabetes.calculator.util.DateUtils
@@ -101,7 +106,11 @@ fun PerfilScreen(
     nightscoutRegistroSyncSummary: NightscoutRegistrosSyncSummary = NightscoutRegistrosSyncSummary(),
     nightscoutImportCount: Int = 0,
     onSyncRegistrosNow: () -> Unit = {},
-    onResyncRegistros30d: () -> Unit = {}
+    onResyncRegistros30d: () -> Unit = {},
+    libreviewRegistroSyncSummary: LibreviewRegistrosSyncSummary = LibreviewRegistrosSyncSummary(),
+    onSyncLibreviewNow: (String?, String?) -> Unit = { _, _ -> },
+    onAbortLibreviewOperation: () -> Unit = {},
+    onResetLibreviewDevice: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val nombre by viewModel.nombre.collectAsState()
@@ -119,6 +128,10 @@ fun PerfilScreen(
     val nightscoutSyncRegistrosActivo by viewModel.nightscoutSyncRegistrosActivo.collectAsState()
     val nightscoutLinkOffsetMinutes by viewModel.nightscoutLinkOffsetMinutes.collectAsState()
     val nightscoutLinkOffsetUnits by viewModel.nightscoutLinkOffsetUnits.collectAsState()
+    val libreviewSyncActivo by viewModel.libreviewSyncActivo.collectAsState()
+    val libreviewRegionOverride by viewModel.libreviewRegionOverride.collectAsState()
+    val libreviewEmail by viewModel.libreviewEmail.collectAsState()
+    val libreviewPassword by viewModel.libreviewPassword.collectAsState()
     val factorHoraMadrugada by viewModel.factorHoraMadrugada.collectAsState()
     val factorHoraManana by viewModel.factorHoraManana.collectAsState()
     val factorHoraTarde by viewModel.factorHoraTarde.collectAsState()
@@ -555,6 +568,14 @@ fun PerfilScreen(
                     nightscoutLinkOffsetUnits = nightscoutLinkOffsetUnits,
                     onNightscoutLinkOffsetMinutesChange = viewModel::updateNightscoutLinkOffsetMinutes,
                     onNightscoutLinkOffsetUnitsChange = viewModel::updateNightscoutLinkOffsetUnits,
+                    libreviewSyncActivo = libreviewSyncActivo,
+                    libreviewRegionOverride = libreviewRegionOverride,
+                    libreviewEmail = libreviewEmail,
+                    libreviewPassword = libreviewPassword,
+                    onLibreviewSyncActivoChange = viewModel::updateLibreviewSyncActivo,
+                    onLibreviewRegionOverrideChange = viewModel::updateLibreviewRegionOverride,
+                    onLibreviewEmailChange = viewModel::updateLibreviewEmail,
+                    onLibreviewPasswordChange = viewModel::updateLibreviewPassword,
                     nightscoutStatus = nightscoutStatus,
                     pendingGlucoseCount = pendingGlucoseCount,
                     pendingMaxAttempts = pendingMaxAttempts,
@@ -562,7 +583,17 @@ fun PerfilScreen(
                     nightscoutRegistroSyncSummary = nightscoutRegistroSyncSummary,
                     nightscoutImportCount = nightscoutImportCount,
                     onSyncRegistrosNow = onSyncRegistrosNow,
-                    onResyncRegistros30d = onResyncRegistros30d
+                    onResyncRegistros30d = onResyncRegistros30d,
+                    libreviewRegistroSyncSummary = libreviewRegistroSyncSummary,
+                    onSyncLibreviewNow = {
+                        viewModel.persistLibreviewCredentialsDraft()
+                        onSyncLibreviewNow(
+                            libreviewEmail.trim().ifEmpty { null },
+                            libreviewPassword.trim().ifEmpty { null }
+                        )
+                    },
+                    onAbortLibreviewOperation = onAbortLibreviewOperation,
+                    onResetLibreviewDevice = onResetLibreviewDevice
                 )
             }
         }
@@ -655,6 +686,14 @@ private fun PerfilContent(
     nightscoutLinkOffsetUnits: String,
     onNightscoutLinkOffsetMinutesChange: (String) -> Unit,
     onNightscoutLinkOffsetUnitsChange: (String) -> Unit,
+    libreviewSyncActivo: Boolean,
+    libreviewRegionOverride: String,
+    libreviewEmail: String,
+    libreviewPassword: String,
+    onLibreviewSyncActivoChange: (Boolean) -> Unit,
+    onLibreviewRegionOverrideChange: (String) -> Unit,
+    onLibreviewEmailChange: (String) -> Unit,
+    onLibreviewPasswordChange: (String) -> Unit,
     nightscoutStatus: NightscoutStatus,
     pendingGlucoseCount: Int,
     pendingMaxAttempts: Int,
@@ -662,12 +701,18 @@ private fun PerfilContent(
     nightscoutRegistroSyncSummary: NightscoutRegistrosSyncSummary,
     nightscoutImportCount: Int,
     onSyncRegistrosNow: () -> Unit,
-    onResyncRegistros30d: () -> Unit
+    onResyncRegistros30d: () -> Unit,
+    libreviewRegistroSyncSummary: LibreviewRegistrosSyncSummary,
+    onSyncLibreviewNow: () -> Unit,
+    onAbortLibreviewOperation: () -> Unit,
+    onResetLibreviewDevice: () -> Unit
 ) {
     var showContextFactorsDialog by remember { mutableStateOf(false) }
     var showDefaultsTable by remember { mutableStateOf(false) }
     var isSyncingRegistros by remember { mutableStateOf(false) }
     var syncBaseline by remember { mutableStateOf<NightscoutRegistrosSyncSummary?>(null) }
+    var isSyncingLibreview by remember { mutableStateOf(false) }
+    var libreviewSyncBaseline by remember { mutableStateOf<LibreviewRegistrosSyncSummary?>(null) }
     val scrollState = rememberScrollState()
 
     LaunchedEffect(nightscoutRegistroSyncSummary, isSyncingRegistros) {
@@ -688,6 +733,24 @@ private fun PerfilContent(
         }
     }
 
+    LaunchedEffect(libreviewRegistroSyncSummary, isSyncingLibreview) {
+        val baseline = libreviewSyncBaseline
+        if (isSyncingLibreview && baseline != null && baseline != libreviewRegistroSyncSummary) {
+            isSyncingLibreview = false
+            libreviewSyncBaseline = null
+        }
+    }
+
+    LaunchedEffect(isSyncingLibreview) {
+        if (isSyncingLibreview) {
+            delay(20_000)
+            if (isSyncingLibreview) {
+                isSyncingLibreview = false
+                libreviewSyncBaseline = null
+            }
+        }
+    }
+
     Box(
         modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.TopCenter
@@ -695,10 +758,10 @@ private fun PerfilContent(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .widthIn(max = 600.dp)
-                .padding(16.dp)
+                .widthIn(max = 640.dp)
+                .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 112.dp)
                 .verticalScroll(scrollState),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
             AvisoMedico()
 
@@ -740,76 +803,72 @@ private fun PerfilContent(
                 }
             }
 
-            Text(
-                text = "Datos Personales y Cálculo",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(horizontal = 4.dp)
+            ProfileSectionHeader(
+                step = "1",
+                title = "Perfil y cálculo",
+                subtitle = "Parámetros de cálculo y recordatorios."
             )
 
-            OutlinedTextField(
-                value = nombre,
-                onValueChange = onNombreChange,
-                label = { Text("Tu nombre") },
-                placeholder = { Text("Ej: María") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                enabled = !isSaving,
-                shape = RoundedCornerShape(12.dp)
-            )
-
-            OutlinedTextField(
-                value = gramosPorRacion,
-                onValueChange = onGramosChange,
-                label = { Text("Gramos por ración") },
-                placeholder = { Text("Ej: 10") },
-                supportingText = {
-                    Text("Gramos de hidratos que equivalen a 1 ración")
-                },
-                modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                singleLine = true,
-                enabled = !isSaving,
-                shape = RoundedCornerShape(12.dp),
-                suffix = { Text("g HC") }
-            )
-
-            OutlinedTextField(
-                value = ratioInsulina,
-                onValueChange = onRatioChange,
-                label = { Text("Ratio Insulina/Ración") },
-                placeholder = { Text("Ej: 1.0") },
-                supportingText = {
-                    Text("Unidades de insulina rápida por ración")
-                },
-                modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                singleLine = true,
-                enabled = !isSaving,
-                shape = RoundedCornerShape(12.dp),
-                suffix = { Text("U") }
-            )
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
-                ),
-                shape = RoundedCornerShape(16.dp)
-            ) {
+            ProfileSurfaceCard {
                 Column(
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier.padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(
-                        text = "Objetivos diarios",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
+                    ProfileCardHeader(
+                        title = "Datos base",
+                        description = "Parámetros principales para cálculo de comidas y dosis."
                     )
-                    Text(
-                        text = "Opcionales. Te avisaremos cuando los superes.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    OutlinedTextField(
+                        value = nombre,
+                        onValueChange = onNombreChange,
+                        label = { Text("Tu nombre") },
+                        placeholder = { Text("Ej: María") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        enabled = !isSaving,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    OutlinedTextField(
+                        value = gramosPorRacion,
+                        onValueChange = onGramosChange,
+                        label = { Text("Gramos por ración") },
+                        placeholder = { Text("Ej: 10") },
+                        supportingText = {
+                            Text("Gramos de hidratos que equivalen a 1 ración")
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        enabled = !isSaving,
+                        shape = RoundedCornerShape(12.dp),
+                        suffix = { Text("g HC") }
+                    )
+                    OutlinedTextField(
+                        value = ratioInsulina,
+                        onValueChange = onRatioChange,
+                        label = { Text("Ratio Insulina/Ración") },
+                        placeholder = { Text("Ej: 1.0") },
+                        supportingText = {
+                            Text("Unidades de insulina rápida por ración")
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        enabled = !isSaving,
+                        shape = RoundedCornerShape(12.dp),
+                        suffix = { Text("U") }
+                    )
+                }
+            }
+
+            ProfileSurfaceCard {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    ProfileCardHeader(
+                        title = "Objetivos diarios",
+                        description = "Opcionales. Te avisaremos cuando los superes."
                     )
 
                     BoxWithConstraints {
@@ -878,26 +937,14 @@ private fun PerfilContent(
                 }
             }
 
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
-                ),
-                shape = RoundedCornerShape(16.dp)
-            ) {
+            ProfileSurfaceCard {
                 Column(
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier.padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text(
-                        text = "Factores contextuales de dosis",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "Configura ajustes por hora, estrés, enfermedad, ciclo y ejercicio.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    ProfileCardHeader(
+                        title = "Factores contextuales de dosis",
+                        description = "Configura ajustes por hora, estrés, enfermedad, ciclo y ejercicio."
                     )
                     Text(
                         text = "Hora: ${factorHoraMadrugada}/${factorHoraManana}/${factorHoraTarde}/${factorHoraNoche}",
@@ -933,21 +980,14 @@ private fun PerfilContent(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(if (showContextFactorsDialog) "Ocultar configuración avanzada" else "Configurar factores")
+                    }
+                }
             }
-        }
 
-    }
-
-    if (showContextFactorsDialog) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainer
-                    ),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
+            if (showContextFactorsDialog) {
+                ProfileSurfaceCard {
                 Column(
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier.padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
@@ -1392,26 +1432,14 @@ private fun PerfilContent(
             }
             }
 
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
-                ),
-                shape = RoundedCornerShape(16.dp)
-            ) {
+            ProfileSurfaceCard {
                 Column(
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier.padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(
-                        text = "Corrección por glucosa",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "Opcional. Se aplicará solo con Nightscout y ambos campos completos.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    ProfileCardHeader(
+                        title = "Corrección por glucosa",
+                        description = "Opcional. Se aplicará solo con Nightscout y ambos campos completos."
                     )
 
                     BoxWithConstraints {
@@ -1487,17 +1515,11 @@ private fun PerfilContent(
                 }
             }
 
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
-                ),
-                shape = RoundedCornerShape(16.dp)
-            ) {
+            ProfileSurfaceCard {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .padding(18.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -1524,64 +1546,24 @@ private fun PerfilContent(
                 }
             }
 
-            Button(
-                onClick = onSave,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                enabled = canSave && !isSaving,
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                if (isSaving) {
-                    CircularProgressIndicator(
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.height(24.dp)
-                    )
-                } else {
-                    Text(
-                        text = if (isNewProfile) "Comenzar" else "Guardar Cambios",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
-            }
-
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
 
-            Text(
-                text = "Conexiones y Datos",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(horizontal = 4.dp)
+            ProfileSectionHeader(
+                step = "2",
+                title = "Integraciones",
+                subtitle = "Nightscout y LibreView."
             )
 
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
-                ),
-                shape = RoundedCornerShape(16.dp)
-            ) {
+            ProfileSurfaceCard {
                 Column(
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier.padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Cloud,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.secondary
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Nightscout",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Text(
-                        text = "Sincroniza tu glucosa en tiempo real.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    ProfileCardHeader(
+                        title = "Nightscout",
+                        description = "Sincroniza tu glucosa en tiempo real.",
+                        icon = Icons.Default.Cloud,
+                        iconTint = MaterialTheme.colorScheme.secondary
                     )
 
                     OutlinedTextField(
@@ -1638,7 +1620,7 @@ private fun PerfilContent(
                     }
 
                     Text(
-                        text = "Tolerancia de enlace dosis app ↔ Nightscout (coincidencia por hora y unidades).",
+                        text = "Tolerancia global de enlace de dosis (App, NovoPen, Nightscout y LibreView).",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1649,7 +1631,7 @@ private fun PerfilContent(
                             OutlinedTextField(
                                 value = nightscoutLinkOffsetMinutes,
                                 onValueChange = onNightscoutLinkOffsetMinutesChange,
-                                label = { Text("Offset hora") },
+                                label = { Text("Ventana hora") },
                                 modifier = modifier,
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -1662,7 +1644,7 @@ private fun PerfilContent(
                             OutlinedTextField(
                                 value = nightscoutLinkOffsetUnits,
                                 onValueChange = onNightscoutLinkOffsetUnitsChange,
-                                label = { Text("Offset dosis") },
+                                label = { Text("Ventana dosis") },
                                 modifier = modifier,
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
@@ -1687,7 +1669,7 @@ private fun PerfilContent(
                         }
                     }
                     Text(
-                        text = "Recomendado: 15 min y 0.5 U",
+                        text = "Se aplica de forma global a la deduplicación y enlace entre fuentes.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1841,35 +1823,54 @@ private fun PerfilContent(
                 }
             }
 
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
-                ),
-                shape = RoundedCornerShape(16.dp)
-            ) {
+            LibreviewSyncCard(
+                libreviewSyncActivo = libreviewSyncActivo,
+                onLibreviewSyncActivoChange = onLibreviewSyncActivoChange,
+                libreviewEmail = libreviewEmail,
+                onLibreviewEmailChange = onLibreviewEmailChange,
+                libreviewPassword = libreviewPassword,
+                onLibreviewPasswordChange = onLibreviewPasswordChange,
+                libreviewRegionOverride = libreviewRegionOverride,
+                onLibreviewRegionOverrideChange = onLibreviewRegionOverrideChange,
+                libreviewRegistroSyncSummary = libreviewRegistroSyncSummary,
+                isSyncingLibreview = isSyncingLibreview,
+                onSyncLibreviewNow = {
+                    libreviewSyncBaseline = libreviewRegistroSyncSummary
+                    isSyncingLibreview = true
+                    onSyncLibreviewNow()
+                },
+                onAbortLibreviewOperation = {
+                    if (!isSyncingLibreview) {
+                        return@LibreviewSyncCard
+                    }
+                    isSyncingLibreview = false
+                    libreviewSyncBaseline = null
+                    onAbortLibreviewOperation()
+                },
+                onResetLibreviewDevice = {
+                    isSyncingLibreview = false
+                    libreviewSyncBaseline = null
+                    onResetLibreviewDevice()
+                },
+                isSaving = isSaving
+            )
+
+            ProfileSectionHeader(
+                step = "3",
+                title = "Copias de seguridad",
+                subtitle = "Exportación, importación y recuperación."
+            )
+
+            ProfileSurfaceCard {
                 Column(
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier.padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Backup,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.secondary
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Copia de seguridad",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    Text(
-                        text = "Exporta tus datos o restáuralos desde un archivo.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    ProfileCardHeader(
+                        title = "Copia de seguridad",
+                        description = "Exporta tus datos o restáuralos desde un archivo.",
+                        icon = Icons.Default.Backup,
+                        iconTint = MaterialTheme.colorScheme.secondary
                     )
 
                     Row(
@@ -1960,6 +1961,121 @@ private fun PerfilContent(
             Spacer(modifier = Modifier.height(16.dp))
         }
 
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Button(
+                onClick = onSave,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 640.dp)
+                    .height(56.dp),
+                enabled = canSave && !isSaving,
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                if (isSaving) {
+                    CircularProgressIndicator(
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.height(24.dp)
+                    )
+                } else {
+                    Text(
+                        text = if (isNewProfile) "Comenzar" else "Guardar Cambios",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+            }
+        }
+
+        // Reparación histórica deshabilitada en Perfil.
+
+    }
+}
+
+@Composable
+private fun ProfileSectionHeader(
+    step: String,
+    title: String,
+    subtitle: String,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Text(
+            text = "$step. $title",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            text = subtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun ProfileCardHeader(
+    title: String,
+    description: String? = null,
+    icon: ImageVector? = null,
+    iconTint: Color = MaterialTheme.colorScheme.primary
+) {
+    if (icon != null) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = iconTint
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    } else {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold
+        )
+    }
+
+    if (!description.isNullOrBlank()) {
+        Text(
+            text = description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun ProfileSurfaceCard(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer
+        ),
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        content()
     }
 }
 
@@ -1984,6 +2100,188 @@ private fun FactorDecimalField(
         suffix = { Text(suffix) }
     )
 }
+
+@Composable
+private fun LibreviewSyncCard(
+    libreviewSyncActivo: Boolean,
+    onLibreviewSyncActivoChange: (Boolean) -> Unit,
+    libreviewEmail: String,
+    onLibreviewEmailChange: (String) -> Unit,
+    libreviewPassword: String,
+    onLibreviewPasswordChange: (String) -> Unit,
+    libreviewRegionOverride: String,
+    onLibreviewRegionOverrideChange: (String) -> Unit,
+    libreviewRegistroSyncSummary: LibreviewRegistrosSyncSummary,
+    isSyncingLibreview: Boolean,
+    onSyncLibreviewNow: () -> Unit,
+    onAbortLibreviewOperation: () -> Unit,
+    onResetLibreviewDevice: () -> Unit,
+    isSaving: Boolean
+) {
+    ProfileSurfaceCard {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            ProfileCardHeader(
+                title = "LibreView",
+                description = "Sube hidratos y dosis locales aplicadas con idempotencia y enlace.",
+                icon = Icons.Default.Cloud,
+                iconTint = MaterialTheme.colorScheme.primary
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Sincronización activa",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Switch(
+                    checked = libreviewSyncActivo,
+                    onCheckedChange = onLibreviewSyncActivoChange,
+                    enabled = !isSaving,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = MaterialTheme.colorScheme.primary,
+                        checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
+                    )
+                )
+            }
+            OutlinedTextField(
+                value = libreviewEmail,
+                onValueChange = onLibreviewEmailChange,
+                label = { Text("Email LibreView") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                enabled = !isSaving,
+                shape = RoundedCornerShape(12.dp)
+            )
+            OutlinedTextField(
+                value = libreviewPassword,
+                onValueChange = onLibreviewPasswordChange,
+                label = { Text("Password LibreView") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                enabled = !isSaving,
+                shape = RoundedCornerShape(12.dp)
+            )
+            OutlinedTextField(
+                value = libreviewRegionOverride,
+                onValueChange = onLibreviewRegionOverrideChange,
+                label = { Text("Región override (opcional)") },
+                placeholder = { Text("US / GB / ES...") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                enabled = !isSaving,
+                shape = RoundedCornerShape(12.dp)
+            )
+            Text(
+                text = "Región automática por locale con fallback US -> GB -> ES.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Pendientes cola LibreView (total): ${libreviewRegistroSyncSummary.pendingCount}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Pendientes UPSERT/DELETE: ${libreviewRegistroSyncSummary.pendingUpsertCount}/${libreviewRegistroSyncSummary.pendingDeleteCount}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Fallidos cola LibreView (total): ${libreviewRegistroSyncSummary.failedCount}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Fallidos UPSERT/DELETE: ${libreviewRegistroSyncSummary.failedUpsertCount}/${libreviewRegistroSyncSummary.failedDeleteCount}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = libreviewRegistroSyncSummary.lastSuccessAt?.let {
+                    "Último sync LibreView: ${DateUtils.formatDateTime(it)}"
+                } ?: "Último sync LibreView: —",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            // Reparación histórica deshabilitada en Perfil por decisión de producto.
+            Text(
+                text = "Reglas sync LibreView: reupload carbs LOCAL (todo histórico) y dosis LOCAL desde 22/02/2026 18:00; sin Nightscout import y sin duplicados.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (!libreviewRegistroSyncSummary.lastErrorMessage.isNullOrBlank()) {
+                Text(
+                    text = "Detalle error: ${libreviewRegistroSyncSummary.lastErrorMessage}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            if (isSyncingLibreview) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp
+                    )
+                    Text(
+                        text = "Sincronizando LibreView...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onSyncLibreviewNow,
+                    enabled = !isSyncingLibreview,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Sincronizar")
+                }
+            }
+
+            if (isSyncingLibreview) {
+                OutlinedButton(
+                    onClick = onAbortLibreviewOperation,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text(
+                        text = "Abortar sincronización",
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+
+            OutlinedButton(
+                onClick = onResetLibreviewDevice,
+                enabled = !isSyncingLibreview && !isSaving,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text("Resetear dispositivo LibreView")
+            }
+        }
+    }
+}
+
+// Reparación histórica LibreView deshabilitada en Perfil.
 
 @Composable
 private fun FactorDefaultsTable() {

@@ -2,6 +2,7 @@ package com.diabetes.calculator.data.repository
 
 import com.diabetes.calculator.data.dao.RegistroComidaConItems
 import com.diabetes.calculator.data.dao.RegistroComidaDao
+import com.diabetes.calculator.data.dao.NfcCanonicalizationResult
 import com.diabetes.calculator.data.entity.AlimentoEnRegistro
 import com.diabetes.calculator.data.entity.EstadoDosis
 import com.diabetes.calculator.data.entity.OrigenRegistro
@@ -141,7 +142,8 @@ class RegistroComidaRepository(private val dao: RegistroComidaDao) {
         nowMillis: Long,
         nightscoutRepository: NightscoutRepository? = null,
         nightscoutUrl: String? = null,
-        nightscoutToken: String? = null
+        nightscoutToken: String? = null,
+        ignoredRemoteTreatmentIds: Set<String> = emptySet()
     ): ActiveInsulinSnapshot {
         val fromMillis = nowMillis - (ACTIVE_INSULIN_DURATION_MINUTES * 60_000L)
         val localDoses = dao.getAppliedDosesInWindow(fromMillis, nowMillis)
@@ -165,7 +167,7 @@ class RegistroComidaRepository(private val dao: RegistroComidaDao) {
             nightscoutToken = nightscoutToken,
             fromMillis = fromMillis,
             toMillis = nowMillis
-        )
+        ).filterNot { ignoredRemoteTreatmentIds.contains(it.treatmentId) }
         if (remoteCandidates.isEmpty()) {
             return ActiveInsulinCalculator.calculateFromEvents(localEvents, nowMillis)
         }
@@ -195,8 +197,17 @@ class RegistroComidaRepository(private val dao: RegistroComidaDao) {
     suspend fun getByNightscoutTreatmentId(treatmentId: String): RegistroComida? =
         dao.getByNightscoutTreatmentId(treatmentId)
 
+    suspend fun getByNightscoutSyncDcid(dcid: String): RegistroComida? =
+        dao.getByNightscoutSyncDcid(dcid)
+
     suspend fun getRegistrosInRangeRaw(from: Long, to: Long): List<RegistroComida> =
         dao.getRegistrosInRangeRaw(from, to)
+
+    suspend fun getOldestUploadableTimestamp(): Long? =
+        dao.getOldestUploadableTimestamp()
+
+    suspend fun getOldestPendingLibreviewTimestamp(): Long? =
+        dao.getOldestPendingLibreviewTimestamp()
 
     suspend fun updateNightscoutLink(
         registroId: Int,
@@ -225,11 +236,69 @@ class RegistroComidaRepository(private val dao: RegistroComidaDao) {
         dao.clearNightscoutLink(registroId)
     }
 
+    suspend fun updateLibreviewCarbsLink(
+        registroId: Int,
+        recordNumber: Long,
+        payloadHash: String?,
+        reconciliadoAt: Long?
+    ) {
+        dao.updateLibreviewCarbsLink(
+            registroId = registroId,
+            recordNumber = recordNumber,
+            payloadHash = payloadHash,
+            reconciliadoAt = reconciliadoAt
+        )
+    }
+
+    suspend fun updateLibreviewInsulinLink(
+        registroId: Int,
+        recordNumber: Long,
+        payloadHash: String?,
+        reconciliadoAt: Long?
+    ) {
+        dao.updateLibreviewInsulinLink(
+            registroId = registroId,
+            recordNumber = recordNumber,
+            payloadHash = payloadHash,
+            reconciliadoAt = reconciliadoAt
+        )
+    }
+
+    suspend fun clearLibreviewCarbsLink(
+        registroId: Int,
+        reconciliadoAt: Long? = null
+    ) {
+        dao.clearLibreviewCarbsLink(registroId, reconciliadoAt)
+    }
+
+    suspend fun clearLibreviewInsulinLink(
+        registroId: Int,
+        reconciliadoAt: Long? = null
+    ) {
+        dao.clearLibreviewInsulinLink(registroId, reconciliadoAt)
+    }
+
     suspend fun updateDoseForLink(
         registroId: Int,
         unidades: Float,
         confirmadaAt: Long?
     ) = dao.updateDoseForLink(registroId, unidades, confirmadaAt)
+
+    suspend fun canonicalizeLocalRegistroWithNfcDose(
+        registroId: Int,
+        unidades: Float,
+        confirmadaAt: Long,
+        dcid: String,
+        now: Long = System.currentTimeMillis()
+    ): NfcCanonicalizationResult? {
+        return dao.canonicalizeLocalRegistroWithNfcDose(
+            registroId = registroId,
+            unidades = unidades,
+            confirmadaAt = confirmadaAt,
+            dcid = dcid,
+            now = now
+        )
+    }
 
     /**
      * Elimina un registro.

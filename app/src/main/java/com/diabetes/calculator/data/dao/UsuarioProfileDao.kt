@@ -42,6 +42,9 @@ interface UsuarioProfileDao {
 
     @Query("UPDATE usuario_profile SET nightscoutSyncBackfillDoneAt = :timestamp WHERE id = :profileId")
     suspend fun updateNightscoutBackfillDoneAt(profileId: Int, timestamp: Long?)
+
+    @Query("UPDATE usuario_profile SET libreviewBackfillDoneAt = :timestamp WHERE id = :profileId")
+    suspend fun updateLibreviewBackfillDoneAt(profileId: Int, timestamp: Long?)
     
     /**
      * Elimina todos los perfiles (para reiniciar).

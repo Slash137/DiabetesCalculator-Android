@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.diabetes.calculator.data.entity.NightscoutTreatmentTombstone
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface NightscoutTreatmentTombstoneDao {
@@ -23,4 +24,10 @@ interface NightscoutTreatmentTombstoneDao {
 
     @Query("DELETE FROM nightscout_treatment_tombstone WHERE treatmentId = :treatmentId")
     suspend fun deleteByTreatmentId(treatmentId: String)
+
+    @Query("SELECT treatmentId FROM nightscout_treatment_tombstone")
+    suspend fun getAllTreatmentIds(): List<String>
+
+    @Query("SELECT treatmentId FROM nightscout_treatment_tombstone")
+    fun observeAllTreatmentIds(): Flow<List<String>>
 }

@@ -29,6 +29,9 @@ Aplicación Android para el cálculo de hidratos, raciones e insulina rápida, c
 - Ajuste automático de corrección por tendencia CGM (flecha Nightscout) en modo con corrección.
 - Fallback manual de glucosa cuando no hay lectura Nightscout reciente.
 - IOB híbrida: prioridad Nightscout + dosis locales aplicadas provisionales hasta que llegue el remoto.
+- Integración LibreView no oficial (enfoque Juggluco-like) con credenciales cifradas y región auto + override.
+- Subida a LibreView con política clínica: comidas suben solo hidratos, insulina solo desde registros NFC NovoPen.
+- Idempotencia estricta en LibreView: no resubir si ya está enlazado y sin cambios, edición sobre el mismo ID y delete lógico.
 - Registro automático de glucosa a las 2 horas (si Nightscout está configurado).
 - Copias de seguridad manuales (exportar/importar) y automáticas diarias cifradas.
 - Importación de la última copia automática desde la pantalla de perfil.
@@ -50,9 +53,9 @@ Aplicación Android para el cálculo de hidratos, raciones e insulina rápida, c
 
 ## Modelos principales
 
-- `UsuarioProfile`: nombre, gramos por ración, ratio insulina/ración y Nightscout.
+- `UsuarioProfile`: nombre, gramos por ración, ratio insulina/ración, Nightscout y configuración de LibreView.
 - `Alimento`: nombre, hidratos por 100 g, fuente y nota.
-- `RegistroComida`: hidratos totales, raciones, insulina, fecha, glucosa antes y después.
+- `RegistroComida`: hidratos totales, raciones, insulina, fecha, glucosa antes/después y enlaces de sync remoto.
 - `AlimentoEnRegistro`: relación alimento-registro con gramos consumidos.
 
 ## Nightscout
@@ -64,6 +67,25 @@ Aplicación Android para el cálculo de hidratos, raciones e insulina rápida, c
 - La corrección por glucosa aplica ajuste por tendencia (`direction`) cuando la lectura usada es Nightscout.
 - En conflictos de datos para IOB, Nightscout tiene prioridad; una dosis local aplicada cuenta de forma provisional hasta sincronizar.
 - Se programa un worker para consultar la glucosa a las 2 horas.
+
+## LibreView (integración no oficial)
+
+- Activación y configuración en **Perfil**.
+- Credenciales por `email/password` en almacenamiento cifrado (no se persisten en Room).
+- Región con autodetección por `Locale` y opción de override manual (código ISO de 2 letras).
+- Compatibilidad inicial orientada a LibreLink 2.
+- Alcance de subida:
+  - Comidas locales: solo hidratos (`foodEntries`).
+  - Dosis: solo si vienen de NFC NovoPen (`insulinEntries`).
+  - Una nueva comida no sube dosis de insulina.
+- Ciclo completo remoto: `UPSERT` al crear/editar y `DELETE` lógico al borrar localmente.
+- Idempotencia/enlace:
+  - Si ya está enlazado con mismo hash, no se reenvía payload.
+  - Se reutiliza `recordNumber` determinista por canal.
+  - Si ya existe un evento propio de la app, se enlaza sin duplicar.
+  - Tolerancias de enlace local: `±2 min`, `±0.2 U` insulina, `±1 g` hidratos.
+- Backfill inicial de 30 días al activar por primera vez (una sola vez).
+- Esta integración es no oficial y puede romperse por cambios del servicio remoto.
 
 ## Transparencia del cálculo
 
@@ -107,6 +129,7 @@ Notas:
 ## Seguridad y privacidad
 
 - El token de Nightscout se guarda en almacenamiento cifrado.
+- Las credenciales/sesión de LibreView se guardan en almacenamiento cifrado.
 - Las copias se exportan cifradas y no exponen el token por defecto.
 - Los datos se mantienen localmente en Room.
 

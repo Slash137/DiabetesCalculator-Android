@@ -5,16 +5,23 @@ import android.util.Log
 import com.diabetes.calculator.data.database.AppDatabase
 import com.diabetes.calculator.data.repository.AlimentoRepository
 import com.diabetes.calculator.data.repository.GeminiRepository
+import com.diabetes.calculator.data.repository.LibreviewRecordCatalogRepository
+import com.diabetes.calculator.data.repository.LibreviewRepairRunRepository
+import com.diabetes.calculator.data.repository.NightscoutRegistrosSyncService
 import com.diabetes.calculator.data.repository.NightscoutTreatmentTombstoneRepository
 import com.diabetes.calculator.data.repository.PendingGlucoseRepository
 import com.diabetes.calculator.data.repository.PlantillaRepository
 import com.diabetes.calculator.data.repository.RegistroComidaRepository
+import com.diabetes.calculator.data.repository.RegistroLibreviewSyncRepository
 import com.diabetes.calculator.data.repository.RegistroNightscoutSyncRepository
 import com.diabetes.calculator.data.repository.UsuarioProfileRepository
 import com.diabetes.calculator.data.repository.NightscoutRepository
+import com.diabetes.calculator.domain.SyncLinkTolerance
 import com.diabetes.calculator.util.BackupManager
+import com.diabetes.calculator.util.LibreviewSecretStore
 import com.diabetes.calculator.util.NightscoutTokenStore
 import com.diabetes.calculator.work.AutoBackupWorker
+import com.diabetes.calculator.work.LibreviewSyncWorker
 import com.diabetes.calculator.work.NightscoutSyncWorker
 import com.google.firebase.Firebase
 import com.google.firebase.appcheck.AppCheckProviderFactory
@@ -23,6 +30,7 @@ import com.google.firebase.initialize
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
+import kotlin.math.max
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
@@ -39,10 +47,15 @@ class DiabetesApp : Application() {
 
     // Almacenamiento seguro
     private val nightscoutTokenStore by lazy { NightscoutTokenStore(this) }
+    private val libreviewSecretStore by lazy { LibreviewSecretStore(this) }
     
     // Repositorios
     val usuarioRepository: UsuarioProfileRepository by lazy {
-        UsuarioProfileRepository(database.usuarioProfileDao(), nightscoutTokenStore)
+        UsuarioProfileRepository(
+            database.usuarioProfileDao(),
+            nightscoutTokenStore,
+            libreviewSecretStore
+        )
     }
     val alimentoRepository: AlimentoRepository by lazy { AlimentoRepository(database.alimentoDao()) }
     val registroRepository: RegistroComidaRepository by lazy { RegistroComidaRepository(database.registroComidaDao()) }
@@ -52,6 +65,15 @@ class DiabetesApp : Application() {
     }
     val registroNightscoutSyncRepository: RegistroNightscoutSyncRepository by lazy {
         RegistroNightscoutSyncRepository(database.registroNightscoutSyncDao())
+    }
+    val registroLibreviewSyncRepository: RegistroLibreviewSyncRepository by lazy {
+        RegistroLibreviewSyncRepository(database.registroLibreviewSyncDao())
+    }
+    val libreviewRecordCatalogRepository: LibreviewRecordCatalogRepository by lazy {
+        LibreviewRecordCatalogRepository(database.libreviewRecordCatalogDao())
+    }
+    val libreviewRepairRunRepository: LibreviewRepairRunRepository by lazy {
+        LibreviewRepairRunRepository(database.libreviewRepairRunDao())
     }
     val nightscoutTreatmentTombstoneRepository: NightscoutTreatmentTombstoneRepository by lazy {
         NightscoutTreatmentTombstoneRepository(database.nightscoutTreatmentTombstoneDao())
@@ -69,6 +91,7 @@ class DiabetesApp : Application() {
             val workManager = WorkManager.getInstance(this@DiabetesApp)
             scheduleAutoBackup(workManager)
             NightscoutSyncWorker.enqueuePeriodic(workManager)
+            LibreviewSyncWorker.enqueuePeriodic(workManager)
 
             if (shouldPopulateSeedData()) {
                 database.populateDatabase()
@@ -77,8 +100,29 @@ class DiabetesApp : Application() {
 
             usuarioRepository.migrateTokenIfNeeded()
             val profile = usuarioRepository.getProfileSync()
+            val globalLinkMinutes = max(
+                profile?.nightscoutLinkOffsetMinutes?.coerceIn(0, 180) ?: SyncLinkTolerance.WINDOW_MINUTES,
+                SyncLinkTolerance.WINDOW_MINUTES
+            )
+            val globalLinkUnits = max(
+                profile?.nightscoutLinkOffsetUnits?.coerceIn(0f, 5f) ?: SyncLinkTolerance.WINDOW_UNITS,
+                SyncLinkTolerance.WINDOW_UNITS
+            )
+            NightscoutRegistrosSyncService(
+                registroRepository = registroRepository,
+                queueRepository = registroNightscoutSyncRepository,
+                tombstoneRepository = nightscoutTreatmentTombstoneRepository,
+                nightscoutRepository = nightscoutRepository,
+                libreviewQueueRepository = registroLibreviewSyncRepository
+            ).reconcileLocalDuplicatesOnly(
+                linkOffsetMinutes = globalLinkMinutes,
+                linkOffsetUnits = globalLinkUnits
+            )
             if (profile?.nightscoutSyncRegistrosActivo == true) {
                 NightscoutSyncWorker.enqueueNow(workManager)
+            }
+            if (profile?.libreviewSyncActivo == true) {
+                LibreviewSyncWorker.enqueueNow(workManager)
             }
         }
     }

@@ -11,6 +11,7 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.diabetes.calculator.data.entity.Alimento
 import com.diabetes.calculator.data.entity.AlimentoEnRegistro
+import com.diabetes.calculator.data.entity.EstadoDosis
 import com.diabetes.calculator.data.entity.EstadoFisicoAlimento
 import com.diabetes.calculator.data.entity.PendingGlucose
 import com.diabetes.calculator.data.entity.PendingGlucoseTipo
@@ -25,12 +26,17 @@ import com.diabetes.calculator.data.entity.requiereEquivalenciaUnidad
 import com.diabetes.calculator.data.entity.tipoMedicionNormalizado
 import com.diabetes.calculator.data.model.NightscoutEntry
 import com.diabetes.calculator.data.repository.AlimentoRepository
+import com.diabetes.calculator.data.repository.NightscoutRegistrosSyncService
 import com.diabetes.calculator.data.repository.NightscoutRepository
+import com.diabetes.calculator.data.repository.NightscoutTreatmentTombstoneRepository
 import com.diabetes.calculator.data.repository.PendingGlucoseRepository
 import com.diabetes.calculator.data.repository.PlantillaRepository
 import com.diabetes.calculator.data.repository.RegistroComidaRepository
+import com.diabetes.calculator.data.repository.RegistroLibreviewSyncRepository
 import com.diabetes.calculator.data.repository.RegistroNightscoutSyncRepository
 import com.diabetes.calculator.data.repository.UsuarioProfileRepository
+import com.diabetes.calculator.data.repository.LibreviewRegistrosSyncService
+import com.diabetes.calculator.data.repository.LibreviewRepository
 import com.diabetes.calculator.domain.CgmReading
 import com.diabetes.calculator.domain.CgmSource
 import com.diabetes.calculator.domain.CgmTrendCorrection
@@ -43,10 +49,12 @@ import com.diabetes.calculator.domain.NivelEstres
 import com.diabetes.calculator.domain.NightscoutAuthorityPolicy
 import com.diabetes.calculator.domain.ResolvedCgmReading
 import com.diabetes.calculator.domain.SeleccionContextoInsulina
+import com.diabetes.calculator.domain.SyncLinkTolerance
 import com.diabetes.calculator.domain.ActiveInsulinSnapshot
 import com.diabetes.calculator.util.DateUtils
 import com.diabetes.calculator.util.NightscoutRetryPolicy
 import com.diabetes.calculator.work.Glucosa2hWorker
+import com.diabetes.calculator.work.LibreviewSyncWorker
 import com.diabetes.calculator.work.NightscoutRetryWorker
 import com.diabetes.calculator.work.NightscoutSyncWorker
 import com.diabetes.calculator.work.Recordatorio2hScheduler
@@ -68,6 +76,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.math.max
 
 private const val NUEVA_COMIDA_SEARCH_DEBOUNCE_MS = 180L
 private const val TWO_HOURS_MS = 2 * 60 * 60 * 1000L
@@ -195,9 +204,11 @@ class NuevaComidaViewModel(
     private val alimentoRepository: AlimentoRepository,
     private val registroRepository: RegistroComidaRepository,
     private val nightscoutRepository: NightscoutRepository,
+    private val nightscoutTreatmentTombstoneRepository: NightscoutTreatmentTombstoneRepository,
     private val plantillaRepository: PlantillaRepository,
     private val pendingGlucoseRepository: PendingGlucoseRepository,
     private val registroNightscoutSyncRepository: RegistroNightscoutSyncRepository,
+    private val registroLibreviewSyncRepository: RegistroLibreviewSyncRepository,
     private val workManager: WorkManager
 ) : ViewModel() {
 
@@ -244,9 +255,6 @@ class NuevaComidaViewModel(
     val manualGlucosaFallbackInput: StateFlow<String> = _manualGlucosaFallbackInput.asStateFlow()
     private val _allowManualGlucosaFallback = MutableStateFlow(true)
     val allowManualGlucosaFallback: StateFlow<Boolean> = _allowManualGlucosaFallback.asStateFlow()
-    private val _dosisConCorreccion = MutableStateFlow(false)
-    val dosisConCorreccion: StateFlow<Boolean> = _dosisConCorreccion.asStateFlow()
-    private var correctionSelectionEdited = false
 
     private val _isSaving = MutableStateFlow(false)
     val isSaving: StateFlow<Boolean> = _isSaving.asStateFlow()
@@ -260,6 +268,9 @@ class NuevaComidaViewModel(
     private val _activeInsulinLoading = MutableStateFlow(true)
     val activeInsulinLoading: StateFlow<Boolean> = _activeInsulinLoading.asStateFlow()
 
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
     private val _uiEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val uiEvents = _uiEvents.asSharedFlow()
 
@@ -267,6 +278,44 @@ class NuevaComidaViewModel(
     private var cachedAlimentos: List<Alimento> = emptyList()
     private var contextInitialized = false
     private var activeInsulinTickerJob: Job? = null
+    private fun buildLibreviewSyncService(profile: UsuarioProfile): LibreviewRegistrosSyncService {
+        val linkMinutes = max(
+            profile.nightscoutLinkOffsetMinutes.coerceIn(0, 180),
+            SyncLinkTolerance.WINDOW_MINUTES
+        )
+        val linkUnits = max(
+            profile.nightscoutLinkOffsetUnits.coerceIn(0f, 5f),
+            SyncLinkTolerance.WINDOW_UNITS
+        )
+        return LibreviewRegistrosSyncService(
+            registroRepository = registroRepository,
+            queueRepository = registroLibreviewSyncRepository,
+            libreviewRepository = LibreviewRepository(),
+            linkMatchDeltaMillis = linkMinutes * 60_000L,
+            linkMatchInsulinDelta = linkUnits
+        )
+    }
+
+    private suspend fun reconcileLocalDuplicates(profile: UsuarioProfile) {
+        val linkMinutes = max(
+            profile.nightscoutLinkOffsetMinutes.coerceIn(0, 180),
+            SyncLinkTolerance.WINDOW_MINUTES
+        )
+        val linkUnits = max(
+            profile.nightscoutLinkOffsetUnits.coerceIn(0f, 5f),
+            SyncLinkTolerance.WINDOW_UNITS
+        )
+        NightscoutRegistrosSyncService(
+            registroRepository = registroRepository,
+            queueRepository = registroNightscoutSyncRepository,
+            tombstoneRepository = nightscoutTreatmentTombstoneRepository,
+            nightscoutRepository = nightscoutRepository,
+            libreviewQueueRepository = registroLibreviewSyncRepository
+        ).reconcileLocalDuplicatesOnly(
+            linkOffsetMinutes = linkMinutes,
+            linkOffsetUnits = linkUnits
+        )
+    }
 
     init {
         loadData()
@@ -336,12 +385,16 @@ class NuevaComidaViewModel(
         val profile = cachedProfile
         val nightscoutUrl = profile?.nightscoutUrl?.trim()
         val nightscoutToken = profile?.nightscoutToken
+        val ignoredTreatmentIds = runCatching {
+            nightscoutTreatmentTombstoneRepository.getAllTreatmentIds()
+        }.getOrElse { emptySet() }
         runCatching {
             registroRepository.getActiveInsulinSnapshot(
                 nowMillis = System.currentTimeMillis(),
                 nightscoutRepository = nightscoutRepository,
                 nightscoutUrl = nightscoutUrl,
-                nightscoutToken = nightscoutToken
+                nightscoutToken = nightscoutToken,
+                ignoredRemoteTreatmentIds = ignoredTreatmentIds
             )
         }.onSuccess { snapshot ->
             _activeInsulinSnapshot.value = snapshot
@@ -354,6 +407,32 @@ class NuevaComidaViewModel(
 
     fun updateSearchQuery(query: String) {
         _searchQuery.value = query
+    }
+
+    fun refreshData() {
+        viewModelScope.launch {
+            if (_isRefreshing.value) return@launch
+            _isRefreshing.value = true
+            try {
+                val profile = cachedProfile
+                val nightscoutUrl = profile?.nightscoutUrl?.trim().orEmpty()
+                if (nightscoutUrl.isNotBlank()) {
+                    runCatching {
+                        nightscoutRepository.getLatestGlucose(
+                            baseUrl = nightscoutUrl,
+                            token = profile?.nightscoutToken
+                        )
+                    }.getOrNull()?.let { latest ->
+                        _nightscoutEntry.value = latest
+                    }
+                }
+                refreshActiveInsulin()
+                recalculate()
+                delay(350L)
+            } finally {
+                _isRefreshing.value = false
+            }
+        }
     }
 
     fun updateNightscoutEntry(entry: NightscoutEntry?) {
@@ -370,11 +449,6 @@ class NuevaComidaViewModel(
 
     fun updateNotas(notas: String) {
         _notas.value = notas
-    }
-
-    fun updateDosisConCorreccion(conCorreccion: Boolean) {
-        correctionSelectionEdited = true
-        _dosisConCorreccion.value = conCorreccion
     }
 
     fun updateFranjaHoraria(value: FranjaHoraria) {
@@ -514,9 +588,6 @@ class NuevaComidaViewModel(
         )
         _calculo.value = nuevoCalculo
         _allowManualGlucosaFallback.value = nuevoCalculo.glucosaFuente != CgmSource.NIGHTSCOUT
-        if (!correctionSelectionEdited) {
-            _dosisConCorreccion.value = profile.aplicarCorreccionPorDefecto && hasRealtimeCorrection(nuevoCalculo)
-        }
     }
 
     fun canSave(): Boolean {
@@ -571,12 +642,12 @@ class NuevaComidaViewModel(
                     totalHidratos = totalHidratos,
                     nowMillis = System.currentTimeMillis()
                 )
-                val unidadesSeleccionadas = selectedInsulinUnits(calc, _dosisConCorreccion.value)
+                val unidadesFinales = calc.unidadesInsulina
                 if (calc.hidratosTotales.isNaN() || calc.hidratosTotales.isInfinite() ||
                     calc.raciones.isNaN() || calc.raciones.isInfinite() ||
                     calc.unidadesInsulina.isNaN() || calc.unidadesInsulina.isInfinite() ||
                     calc.unidadesInsulinaSinCorreccion.isNaN() || calc.unidadesInsulinaSinCorreccion.isInfinite() ||
-                    unidadesSeleccionadas.isNaN() || unidadesSeleccionadas.isInfinite()
+                    unidadesFinales.isNaN() || unidadesFinales.isInfinite()
                 ) {
                     _uiEvents.tryEmit("Cálculo inválido. Revisa los datos introducidos")
                     return@launch
@@ -592,11 +663,12 @@ class NuevaComidaViewModel(
                 val registro = RegistroComida(
                     hidratosTotales = calc.hidratosTotales,
                     racionesCalculadas = calc.raciones,
-                    unidadesInsulina = unidadesSeleccionadas,
+                    unidadesInsulina = unidadesFinales,
                     ratioInsulinaHc = ratioInsulinaHc,
                     notas = _notas.value.trim().ifEmpty { null },
                     glucosaAntesMgdl = glucosaAntes,
-                    dosisConCorreccion = _dosisConCorreccion.value,
+                    dosisEstado = EstadoDosis.PENDIENTE.value,
+                    dosisConCorreccion = hasRealtimeCorrection(calc),
                     unidadesCorreccionSugerida = calc.unidadesCorreccion,
                     factorCorreccionMgdlPorUUsado = profile.factorCorreccionMgdlPorU,
                     franjaHorariaUsada = calc.franjaHoraria.key,
@@ -631,14 +703,19 @@ class NuevaComidaViewModel(
                     _uiEvents.tryEmit("No se pudo calcular la comida con los datos actuales")
                     return@launch
                 }
-
                 val registroId = registroRepository.insertRegistroCompleto(registro, itemsEntities)
+                reconcileLocalDuplicates(profile)
                 if (nightscoutEnabled) {
                     scheduleGlucosa2h(registroId)
                 }
                 if (profile.nightscoutSyncRegistrosActivo && nightscoutEnabled) {
                     registroNightscoutSyncRepository.upsertPending(registroId)
                     NightscoutSyncWorker.enqueueNow(workManager)
+                }
+                if (profile.libreviewSyncActivo) {
+                    val libreviewSyncService = buildLibreviewSyncService(profile)
+                    libreviewSyncService.enqueueUpsertForRegistro(registroId)
+                    LibreviewSyncWorker.enqueueNow(workManager)
                 }
                 if (profile.recordatorio2hActivo) {
                     Recordatorio2hScheduler.schedule(
@@ -798,14 +875,6 @@ class NuevaComidaViewModel(
         return kotlin.math.abs(calculo.unidadesCorreccion) >= 0.05f
     }
 
-    private fun selectedInsulinUnits(calculo: CalculoActual, conCorreccion: Boolean): Float {
-        return if (conCorreccion) {
-            calculo.unidadesInsulina
-        } else {
-            calculo.unidadesInsulinaSinCorreccion
-        }
-    }
-
     private fun resetContextSelections() {
         val defaults = FactoresContextoInsulina.defaultSelection()
         _franjaHoraria.value = defaults.franjaHoraria
@@ -820,8 +889,6 @@ class NuevaComidaViewModel(
         _notas.value = ""
         _manualGlucosaFallbackInput.value = ""
         _calculo.value = CalculoActual()
-        _dosisConCorreccion.value = false
-        correctionSelectionEdited = false
         _searchQuery.value = ""
         resetContextSelections()
         recalculate()
@@ -998,9 +1065,11 @@ class NuevaComidaViewModel(
         private val alimentoRepository: AlimentoRepository,
         private val registroRepository: RegistroComidaRepository,
         private val nightscoutRepository: NightscoutRepository,
+        private val nightscoutTreatmentTombstoneRepository: NightscoutTreatmentTombstoneRepository,
         private val plantillaRepository: PlantillaRepository,
         private val pendingGlucoseRepository: PendingGlucoseRepository,
         private val registroNightscoutSyncRepository: RegistroNightscoutSyncRepository,
+        private val registroLibreviewSyncRepository: RegistroLibreviewSyncRepository,
         private val workManager: WorkManager
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
@@ -1011,9 +1080,11 @@ class NuevaComidaViewModel(
                     alimentoRepository,
                     registroRepository,
                     nightscoutRepository,
+                    nightscoutTreatmentTombstoneRepository,
                     plantillaRepository,
                     pendingGlucoseRepository,
                     registroNightscoutSyncRepository,
+                    registroLibreviewSyncRepository,
                     workManager
                 ) as T
             }

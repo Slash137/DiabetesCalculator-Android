@@ -30,12 +30,15 @@ import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshContainer
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -53,6 +56,7 @@ import com.diabetes.calculator.data.dao.RegistroComidaConItems
 import com.diabetes.calculator.data.entity.RegistroComida
 import com.diabetes.calculator.data.entity.EstadoDosis
 import com.diabetes.calculator.data.entity.OrigenRegistro
+import com.diabetes.calculator.domain.LibreviewUploadPolicy
 import com.diabetes.calculator.domain.ACTIVE_INSULIN_DURATION_MINUTES
 import com.diabetes.calculator.domain.FactoresContextoInsulina
 import com.diabetes.calculator.domain.FaseCicloHormonal
@@ -60,6 +64,7 @@ import com.diabetes.calculator.domain.FranjaHoraria
 import com.diabetes.calculator.domain.NivelEjercicio
 import com.diabetes.calculator.domain.NivelEnfermedad
 import com.diabetes.calculator.domain.NivelEstres
+import com.diabetes.calculator.domain.SyncLinkTolerance
 import com.diabetes.calculator.util.DateUtils
 import com.diabetes.calculator.ui.components.ScrollToTopForLazyList
 import com.diabetes.calculator.work.NightscoutSyncWorker
@@ -110,6 +115,7 @@ private fun HistorialMedicalNotice(modifier: Modifier = Modifier) {
 /**
  * Pantalla de historial de comidas con diseño Material You coherente.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistorialScreen(
     viewModel: HistorialViewModel
@@ -120,6 +126,8 @@ fun HistorialScreen(
     val dayFilter by viewModel.dayFilter.collectAsState()
     val doseStatusFilter by viewModel.doseStatusFilter.collectAsState()
     val factorCorreccionFallback by viewModel.factorCorreccionFallback.collectAsState()
+    val libreviewFailedRegistroIds by viewModel.libreviewFailedRegistroIds.collectAsState()
+    val nightscoutPendingRegistroIds by viewModel.nightscoutPendingRegistroIds.collectAsState()
     var showDayFilterMenu by remember { mutableStateOf(false) }
     var showDoseStatusMenu by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<RegistroComidaConItems?>(null) }
@@ -128,6 +136,8 @@ fun HistorialScreen(
     var plantillaNombre by remember { mutableStateOf("") }
     var cargandoGlucosaRetroactiva by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val pullToRefreshState = rememberPullToRefreshState()
     val nowMillis by rememberCurrentTimeTicker()
     val successRegistros = (uiState as? HistorialUiState.Success)?.registros.orEmpty()
     val activeInsulinStatesByRegistroId = remember(successRegistros, nowMillis) {
@@ -176,18 +186,6 @@ fun HistorialScreen(
                     )
                 )
             }
-        }
-    }
-
-    val onUpdateDoseCorrection: (RegistroComidaConItems, Boolean?) -> Unit = { registro, conCorreccion ->
-        viewModel.updateDoseCorrection(registro.registro.id, conCorreccion)
-        val previousDetail = detailRegistro
-        if (previousDetail?.registro?.id == registro.registro.id &&
-            EstadoDosis.fromValue(previousDetail.registro.dosisEstado) == EstadoDosis.APLICADA
-        ) {
-            detailRegistro = previousDetail.copy(
-                registro = previousDetail.registro.copy(dosisConCorreccion = conCorreccion)
-            )
         }
     }
 
@@ -243,8 +241,24 @@ fun HistorialScreen(
         cargandoGlucosaRetroactiva = false
     }
 
+    LaunchedEffect(pullToRefreshState.isRefreshing) {
+        if (pullToRefreshState.isRefreshing && !isRefreshing) {
+            viewModel.refreshSyncNow()
+        }
+    }
+
+    LaunchedEffect(isRefreshing) {
+        if (isRefreshing && !pullToRefreshState.isRefreshing) {
+            pullToRefreshState.startRefresh()
+        } else if (!isRefreshing && pullToRefreshState.isRefreshing) {
+            pullToRefreshState.endRefresh()
+        }
+    }
+
     Box(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .nestedScroll(pullToRefreshState.nestedScrollConnection),
         contentAlignment = Alignment.TopCenter
     ) {
         Column(
@@ -380,6 +394,8 @@ fun HistorialScreen(
                         registros = state.registros,
                         activeInsulinStatesByRegistroId = activeInsulinStatesByRegistroId,
                         activeDoseCount = activeDoseCount,
+                        libreviewFailedRegistroIds = libreviewFailedRegistroIds,
+                        nightscoutPendingRegistroIds = nightscoutPendingRegistroIds,
                         onOpenDetail = { detailRegistro = it }
                     )
                 }
@@ -405,6 +421,11 @@ fun HistorialScreen(
                     .padding(20.dp)
             )
         }
+
+        PullToRefreshContainer(
+            state = pullToRefreshState,
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
     }
 
     if (pendingDelete != null) {
@@ -453,16 +474,14 @@ fun HistorialScreen(
                     val current = detailRegistro ?: return@RegistroDetalleBottomSheet
                     onUpdateDoseStatus(current, nuevoEstado)
                 },
-            onUpdateDoseCorrection = { conCorreccion ->
-                val current = detailRegistro ?: return@RegistroDetalleBottomSheet
-                onUpdateDoseCorrection(current, conCorreccion)
-            },
                 onUpdateDoseForLink = { unidades, confirmadaAt ->
                     val current = detailRegistro ?: return@RegistroDetalleBottomSheet
                     onUpdateDoseForLink(current, unidades, confirmadaAt)
                 },
                 activeInsulinState = detailActiveInsulinState,
                 activeDoseCount = activeDoseCount,
+                libreviewFailedRegistroIds = libreviewFailedRegistroIds,
+                nightscoutPendingRegistroIds = nightscoutPendingRegistroIds,
                 cargandoGlucosaRetroactiva = cargandoGlucosaRetroactiva
             )
     }
@@ -545,6 +564,8 @@ private fun HistorialList(
     registros: List<RegistroComidaConItems>,
     activeInsulinStatesByRegistroId: Map<Int, ActiveInsulinCardState?>,
     activeDoseCount: Int,
+    libreviewFailedRegistroIds: Set<Int>,
+    nightscoutPendingRegistroIds: Set<Int>,
     onOpenDetail: (RegistroComidaConItems) -> Unit
 ) {
     val expandedDays = remember { mutableStateMapOf<Long, Boolean>() }
@@ -603,6 +624,8 @@ private fun HistorialList(
                         registro = item.registro,
                         activeInsulinState = activeInsulinState,
                         activeDoseCount = activeDoseCount,
+                        libreviewFailedRegistroIds = libreviewFailedRegistroIds,
+                        nightscoutPendingRegistroIds = nightscoutPendingRegistroIds,
                         onOpenDetail = { onOpenDetail(item.registro) }
                     )
                 }
@@ -658,12 +681,18 @@ private fun RegistroCard(
     registro: RegistroComidaConItems,
     activeInsulinState: ActiveInsulinCardState?,
     activeDoseCount: Int,
+    libreviewFailedRegistroIds: Set<Int>,
+    nightscoutPendingRegistroIds: Set<Int>,
     onOpenDetail: () -> Unit
 ) {
     val origenRegistro = OrigenRegistro.fromValue(registro.registro.origenRegistro)
     val isNightscoutImport = origenRegistro == OrigenRegistro.NIGHTSCOUT_IMPORT
     val isNightscoutLinked = !registro.registro.nightscoutTreatmentId.isNullOrBlank()
+    val isNfcDoseOnly = isNfcDoseOnlyRegistro(registro.registro)
+    val isLocalDoseOnly = isLocalDoseOnlyRegistro(registro)
+    val showDoseStyleCard = isNightscoutImport || isNfcDoseOnly || isLocalDoseOnly
     val estadoDosis = EstadoDosis.fromValue(registro.registro.dosisEstado)
+    val isNightscoutSyncPending = nightscoutPendingRegistroIds.contains(registro.registro.id)
     val insulinBreakdown = calculateInsulinBreakdown(registro)
     val activeIntensity = activeInsulinState?.intensity?.coerceIn(0f, 1f) ?: 0f
     val visualActiveIntensity = activeInsulinVisualIntensity(activeIntensity)
@@ -671,8 +700,16 @@ private fun RegistroCard(
     val nightscoutState = nightscoutSyncState(
         origenRegistro = origenRegistro,
         isNightscoutLinked = isNightscoutLinked,
+        isNfcDoseOnly = isNfcDoseOnly,
+        isSyncPending = isNightscoutSyncPending,
         estadoDosis = estadoDosis
     )
+    val libreviewState = libreviewSyncState(
+        registro = registro.registro,
+        estadoDosis = estadoDosis,
+        hasFailed = libreviewFailedRegistroIds.contains(registro.registro.id)
+    )
+    val showLibreviewChip = shouldShowLibreviewSyncChip(registro.registro)
     val baseCardColor = MaterialTheme.colorScheme.surfaceContainerLow
     val highlightedCardColor = lerp(
         start = baseCardColor,
@@ -723,7 +760,7 @@ private fun RegistroCard(
             val isCompactWidth = maxWidth <= 360.dp
 
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (isNightscoutImport) {
+                if (showDoseStyleCard) {
                     if (isCompactWidth) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -759,7 +796,12 @@ private fun RegistroCard(
                                 )
                             }
                             Spacer(modifier = Modifier.width(8.dp))
-                            NightscoutSyncChip(state = nightscoutState)
+                            SyncStatusChips(
+                                nightscoutState = nightscoutState,
+                                libreviewState = libreviewState,
+                                showLibreview = showLibreviewChip,
+                                isNfcDoseOnly = isNfcDoseOnly
+                            )
                         }
                     } else {
                         Row(
@@ -799,7 +841,12 @@ private fun RegistroCard(
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                                 )
                             }
-                            NightscoutSyncChip(state = nightscoutState)
+                            SyncStatusChips(
+                                nightscoutState = nightscoutState,
+                                libreviewState = libreviewState,
+                                showLibreview = showLibreviewChip,
+                                isNfcDoseOnly = isNfcDoseOnly
+                            )
                         }
                     }
                 } else {
@@ -825,9 +872,17 @@ private fun RegistroCard(
                                 modifier = Modifier.weight(1f)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            DoseStatusBadge(estado = estadoDosis)
+                            DoseStatusBadge(
+                                estado = estadoDosis,
+                                iconOnly = true
+                            )
                             Spacer(modifier = Modifier.width(8.dp))
-                            NightscoutSyncChip(state = nightscoutState)
+                            SyncStatusChips(
+                                nightscoutState = nightscoutState,
+                                libreviewState = libreviewState,
+                                showLibreview = showLibreviewChip,
+                                isNfcDoseOnly = isNfcDoseOnly
+                            )
                         }
                     } else {
                         Row(
@@ -857,7 +912,12 @@ private fun RegistroCard(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 DoseStatusBadge(estado = estadoDosis)
                             }
-                            NightscoutSyncChip(state = nightscoutState)
+                            SyncStatusChips(
+                                nightscoutState = nightscoutState,
+                                libreviewState = libreviewState,
+                                showLibreview = showLibreviewChip,
+                                isNfcDoseOnly = isNfcDoseOnly
+                            )
                         }
                     }
                 }
@@ -912,7 +972,7 @@ private fun RegistroCard(
                     }
                 }
 
-                if (!isNightscoutImport) {
+                if (!showDoseStyleCard) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -977,10 +1037,11 @@ private fun RegistroDetalleBottomSheet(
     onRequestDelete: () -> Unit,
     onRequestCreateTemplate: () -> Unit,
     onUpdateDoseStatus: (EstadoDosis) -> Unit,
-    onUpdateDoseCorrection: (Boolean?) -> Unit,
     onUpdateDoseForLink: (Float, Long?) -> Unit,
     activeInsulinState: ActiveInsulinCardState?,
     activeDoseCount: Int,
+    libreviewFailedRegistroIds: Set<Int>,
+    nightscoutPendingRegistroIds: Set<Int>,
     cargandoGlucosaRetroactiva: Boolean = false
 ) {
     ModalBottomSheet(
@@ -999,11 +1060,23 @@ private fun RegistroDetalleBottomSheet(
             val origenRegistro = OrigenRegistro.fromValue(registro.registro.origenRegistro)
             val isNightscoutImport = origenRegistro == OrigenRegistro.NIGHTSCOUT_IMPORT
             val isNightscoutLinked = !registro.registro.nightscoutTreatmentId.isNullOrBlank()
+            val isNfcDoseOnly = isNfcDoseOnlyRegistro(registro.registro)
+            val isLocalDoseOnly = isLocalDoseOnlyRegistro(registro)
+            val showDoseStyleCard = isNightscoutImport || isNfcDoseOnly || isLocalDoseOnly
+            val isNightscoutSyncPending = nightscoutPendingRegistroIds.contains(registro.registro.id)
             val nightscoutState = nightscoutSyncState(
                 origenRegistro = origenRegistro,
                 isNightscoutLinked = isNightscoutLinked,
+                isNfcDoseOnly = isNfcDoseOnly,
+                isSyncPending = isNightscoutSyncPending,
                 estadoDosis = estadoDosis
             )
+            val libreviewState = libreviewSyncState(
+                registro = registro.registro,
+                estadoDosis = estadoDosis,
+                hasFailed = libreviewFailedRegistroIds.contains(registro.registro.id)
+            )
+            val showLibreviewChip = shouldShowLibreviewSyncChip(registro.registro)
             var enlaceHora by remember {
                 mutableStateOf(DateUtils.formatTime(registro.registro.dosisConfirmadaAt ?: registro.registro.fecha))
             }
@@ -1048,7 +1121,12 @@ private fun RegistroDetalleBottomSheet(
                         }
                     }
                 }
-                NightscoutSyncChip(state = nightscoutState)
+                SyncStatusChips(
+                    nightscoutState = nightscoutState,
+                    libreviewState = libreviewState,
+                    showLibreview = showLibreviewChip,
+                    isNfcDoseOnly = isNfcDoseOnly
+                )
 //                IconButton(onClick = onDismiss) {
 //                    Icon(
 //                        imageVector = Icons.Default.Close,
@@ -1122,7 +1200,7 @@ private fun RegistroDetalleBottomSheet(
                 registro = registro,
                 fallbackFactorCorreccionMgdlPorU = factorCorreccionFallbackMgdlPorU
             )
-            if (!isNightscoutImport && !ratioText.isNullOrBlank()) {
+            if (!showDoseStyleCard && !ratioText.isNullOrBlank()) {
                 Text(
                     text = ratioText,
                     style = MaterialTheme.typography.labelMedium,
@@ -1131,7 +1209,7 @@ private fun RegistroDetalleBottomSheet(
             }
 
             val insulinBreakdown = calculateInsulinBreakdown(registro)
-            if (isNightscoutImport) {
+            if (showDoseStyleCard) {
                 DataChip(
                     modifier = Modifier.fillMaxWidth(),
                     label = "DOSIS",
@@ -1232,7 +1310,7 @@ private fun RegistroDetalleBottomSheet(
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold
             )
-            if (isNightscoutImport) {
+            if (showDoseStyleCard) {
                 StatDetailRow(
                     label = "Dosis",
                     value = formatUnits(insulinBreakdown.total)
@@ -1266,30 +1344,8 @@ private fun RegistroDetalleBottomSheet(
                 )
             }
 
-            if (!isNightscoutImport) {
-                Column(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    if (estadoDosis == EstadoDosis.APLICADA) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Insulina total",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            DoseCorrectionSelector(
-                                conCorreccion = registro.registro.dosisConCorreccion,
-                                onSelection = onUpdateDoseCorrection
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(11.dp))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                }
+            if (!showDoseStyleCard) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
                 Text(
                     text = "Alimentos",
@@ -1383,7 +1439,8 @@ private fun RegistroDetalleBottomSheet(
                 }
                 val dosisRemota = registro.registro.unidadesInsulinaRemota
                 val mostrarDiferenciaDosis = dosisRemota != null &&
-                    kotlin.math.abs(dosisRemota - registro.registro.unidadesInsulina) > 0.5f
+                    kotlin.math.abs(dosisRemota - registro.registro.unidadesInsulina) >
+                    SyncLinkTolerance.WINDOW_UNITS
                 val enlaceDosisValue = enlaceDosis.replace(',', '.').toFloatOrNull()
 
                 Surface(
@@ -1402,7 +1459,7 @@ private fun RegistroDetalleBottomSheet(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Ajuste para enlace Nightscout",
+                                text = "Ajuste para sincronizar",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -1426,7 +1483,7 @@ private fun RegistroDetalleBottomSheet(
                                         value = formatUnits(registro.registro.unidadesInsulina)
                                     )
                                     StatDetailRow(
-                                        label = "Dosis Nightscout",
+                                        label = "Dosis sincronizada",
                                         value = formatUnits(dosisRemota!!)
                                     )
                                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -1435,14 +1492,14 @@ private fun RegistroDetalleBottomSheet(
                                 OutlinedTextField(
                                     value = enlaceHora,
                                     onValueChange = { enlaceHora = it },
-                                    label = { Text("Hora confirmada (HH:mm)") },
+                                    label = { Text("Hora para sincronizar (HH:mm)") },
                                     singleLine = true,
                                     modifier = Modifier.fillMaxWidth()
                                 )
                                 OutlinedTextField(
                                     value = enlaceDosis,
                                     onValueChange = { enlaceDosis = it },
-                                    label = { Text("Dosis para enlace (U)") },
+                                    label = { Text("Dosis para sincronizar (U)") },
                                     singleLine = true,
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     modifier = Modifier.fillMaxWidth()
@@ -1467,7 +1524,7 @@ private fun RegistroDetalleBottomSheet(
                                     modifier = Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(12.dp)
                                 ) {
-                                    Text("Guardar ajuste de enlace")
+                                    Text("Guardar ajuste de sincronización")
                                 }
                                 if (enlaceError != null || enlaceDosisValue == null) {
                                     Text(
@@ -1501,11 +1558,43 @@ private fun RegistroDetalleBottomSheet(
 }
 
 @Composable
+private fun SyncStatusChips(
+    nightscoutState: NightscoutSyncState,
+    libreviewState: LibreviewSyncState,
+    showLibreview: Boolean,
+    isNfcDoseOnly: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+//        if (isNfcDoseOnly) {
+//            NovoPenNfcChip()
+//        }
+        if (showLibreview) {
+            LibreviewSyncChip(state = libreviewState)
+        }
+        NightscoutSyncChip(
+            state = nightscoutState,
+            isNfcDoseOnly = isNfcDoseOnly
+        )
+    }
+}
+
+@Composable
 private fun NightscoutSyncChip(
     state: NightscoutSyncState,
+    isNfcDoseOnly: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val (icon, color, description) = when (state) {
+        NightscoutSyncState.SYNCING -> Triple(
+            Icons.Default.Autorenew,
+            MaterialTheme.colorScheme.primary,
+            "Sincronizando con Nightscout"
+        )
         NightscoutSyncState.LINKED -> Triple(
             Icons.Default.Cloud,
             MaterialTheme.colorScheme.secondary,
@@ -1520,6 +1609,88 @@ private fun NightscoutSyncChip(
             Icons.Default.CloudQueue,
             MaterialTheme.colorScheme.tertiary,
             "Registro importado desde Nightscout"
+        )
+        NightscoutSyncState.NFC_LOCAL -> Triple(
+            Icons.Default.CloudQueue,
+            MaterialTheme.colorScheme.primary,
+            if (isNfcDoseOnly) {
+                "Dosis NFC sincronizable con Nightscout"
+            } else {
+                "Registro NFC sincronizable con Nightscout"
+            }
+        )
+    }
+
+    Surface(
+        modifier = modifier,
+        color = color.copy(alpha = 0.14f),
+        shape = RoundedCornerShape(999.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = description,
+                tint = color,
+                modifier = Modifier.size(12.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun NovoPenNfcChip(
+    modifier: Modifier = Modifier
+) {
+    val color = MaterialTheme.colorScheme.tertiary
+    Surface(
+        modifier = modifier,
+        color = color.copy(alpha = 0.14f),
+        shape = RoundedCornerShape(999.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.CloudQueue,
+                contentDescription = "Origen NovoPen NFC",
+                tint = color,
+                modifier = Modifier.size(12.dp)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = "NovoPen NFC",
+                style = MaterialTheme.typography.labelSmall,
+                color = color,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
+
+@Composable
+private fun LibreviewSyncChip(
+    state: LibreviewSyncState,
+    modifier: Modifier = Modifier
+) {
+    val (icon, color, description) = when (state) {
+        LibreviewSyncState.LINKED -> Triple(
+            Icons.Default.Sync,
+            MaterialTheme.colorScheme.primary,
+            "Registro enlazado con LibreView"
+        )
+        LibreviewSyncState.NOT_LINKED -> Triple(
+            Icons.Default.SyncDisabled,
+            MaterialTheme.colorScheme.onSurfaceVariant,
+            "Registro no enlazado con LibreView"
+        )
+        LibreviewSyncState.FAILED -> Triple(
+            Icons.Default.ErrorOutline,
+            MaterialTheme.colorScheme.error,
+            "Registro con error de sincronización en LibreView"
         )
     }
 
@@ -1591,9 +1762,17 @@ private fun rememberCurrentTimeTicker(
 }
 
 private enum class NightscoutSyncState {
+    SYNCING,
     LINKED,
     NOT_LINKED,
-    SERVER
+    SERVER,
+    NFC_LOCAL
+}
+
+private enum class LibreviewSyncState {
+    LINKED,
+    NOT_LINKED,
+    FAILED
 }
 
 private data class ActiveInsulinCardState(
@@ -1634,19 +1813,58 @@ private fun activeInsulinCardStateNow(
 private fun nightscoutSyncState(
     origenRegistro: OrigenRegistro,
     isNightscoutLinked: Boolean,
+    isNfcDoseOnly: Boolean,
+    isSyncPending: Boolean,
     estadoDosis: EstadoDosis
 ): NightscoutSyncState {
     return when {
         origenRegistro == OrigenRegistro.NIGHTSCOUT_IMPORT -> NightscoutSyncState.SERVER
+        isSyncPending -> NightscoutSyncState.SYNCING
+        isNfcDoseOnly -> NightscoutSyncState.NFC_LOCAL
         estadoDosis == EstadoDosis.OMITIDA -> NightscoutSyncState.NOT_LINKED
         isNightscoutLinked -> NightscoutSyncState.LINKED
         else -> NightscoutSyncState.NOT_LINKED
     }
 }
 
+private fun shouldShowLibreviewSyncChip(registro: RegistroComida): Boolean {
+    return registro.libreviewCarbsRecordNumber != null ||
+        registro.libreviewInsulinRecordNumber != null ||
+        LibreviewUploadPolicy.shouldUploadCarbs(registro) ||
+        LibreviewUploadPolicy.shouldUploadAppliedInsulin(registro)
+}
+
+private fun libreviewSyncState(
+    registro: RegistroComida,
+    estadoDosis: EstadoDosis,
+    hasFailed: Boolean
+): LibreviewSyncState {
+    if (hasFailed) return LibreviewSyncState.FAILED
+    val hasLink = registro.libreviewCarbsRecordNumber != null || registro.libreviewInsulinRecordNumber != null
+    if (hasLink && estadoDosis != EstadoDosis.OMITIDA) return LibreviewSyncState.LINKED
+    return LibreviewSyncState.NOT_LINKED
+}
+
+private fun isNfcDoseOnlyRegistro(registro: RegistroComida): Boolean {
+    return LibreviewUploadPolicy.isNovoPenNfcRegistro(registro) &&
+        registro.hidratosTotales <= 0f &&
+        registro.racionesCalculadas <= 0f
+}
+
+private fun isLocalDoseOnlyRegistro(registro: RegistroComidaConItems): Boolean {
+    val raw = registro.registro
+    return OrigenRegistro.fromValue(raw.origenRegistro) == OrigenRegistro.LOCAL &&
+        registro.items.isEmpty() &&
+        raw.hidratosTotales <= 0f &&
+        raw.racionesCalculadas <= 0f &&
+        raw.unidadesInsulina.isFinite() &&
+        raw.unidadesInsulina > 0f
+}
+
 @Composable
 private fun DoseStatusBadge(
-    estado: EstadoDosis
+    estado: EstadoDosis,
+    iconOnly: Boolean = false
 ) {
     val color = when (estado) {
         EstadoDosis.PENDIENTE -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -1659,21 +1877,26 @@ private fun DoseStatusBadge(
         shape = RoundedCornerShape(999.dp)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            modifier = Modifier.padding(
+                horizontal = if (iconOnly) 8.dp else 10.dp,
+                vertical = if (iconOnly) 4.dp else 6.dp
+            ),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 imageVector = doseStatusIcon(estado),
-                contentDescription = null,
+                contentDescription = estado.label,
                 tint = color,
-                modifier = Modifier.size(14.dp)
+                modifier = Modifier.size(if (iconOnly) 12.dp else 14.dp)
             )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = estado.label,
-                style = MaterialTheme.typography.labelMedium,
-                color = color
-            )
+            if (!iconOnly) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = estado.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = color
+                )
+            }
         }
     }
 }
@@ -1825,90 +2048,10 @@ private fun DoseStatusSelector(
     }
 }
 
-private enum class DoseCorrectionOption(
-    val label: String,
-    val value: Boolean?
-) {
-    WITH_CORRECTION("Dosis ajustada", true),
-    WITHOUT_CORRECTION("Dosis sin ajustar", false),
-    UNSPECIFIED("Sin marcar", null)
-}
-
-@Composable
-private fun DoseCorrectionSelector(
-    conCorreccion: Boolean?,
-    onSelection: (Boolean?) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val selected = DoseCorrectionOption.values().firstOrNull { it.value == conCorreccion }
-        ?: DoseCorrectionOption.UNSPECIFIED
-    val color = when (conCorreccion) {
-        true -> MaterialTheme.colorScheme.primary
-        false -> MaterialTheme.colorScheme.tertiary
-        null -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
-
-    Box {
-        AssistChip(
-            onClick = { expanded = true },
-            label = { Text(selected.label) },
-            leadingIcon = {
-                Icon(
-                    imageVector = doseCorrectionIcon(conCorreccion),
-                    contentDescription = null
-                )
-            },
-            trailingIcon = {
-                Icon(
-                    imageVector = Icons.Default.ArrowDropDown,
-                    contentDescription = null
-                )
-            },
-            colors = AssistChipDefaults.assistChipColors(
-                containerColor = color.copy(alpha = 0.14f),
-                labelColor = color,
-                leadingIconContentColor = color,
-                trailingIconContentColor = color
-            )
-        )
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false }
-        ) {
-            DoseCorrectionOption.values().forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(option.label) },
-                    onClick = {
-                        onSelection(option.value)
-                        expanded = false
-                    },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = doseCorrectionIcon(option.value),
-                            contentDescription = null
-                        )
-                    },
-                    trailingIcon = {
-                        if (option == selected) {
-                            Icon(imageVector = Icons.Default.Check, contentDescription = null)
-                        }
-                    }
-                )
-            }
-        }
-    }
-}
-
 private fun doseStatusIcon(estado: EstadoDosis) = when (estado) {
     EstadoDosis.PENDIENTE -> Icons.Default.Schedule
     EstadoDosis.APLICADA -> Icons.Default.CheckCircle
     EstadoDosis.OMITIDA -> Icons.Default.Cancel
-}
-
-private fun doseCorrectionIcon(conCorreccion: Boolean?) = when (conCorreccion) {
-    true -> Icons.Default.Add
-    false -> Icons.Default.Remove
-    null -> Icons.AutoMirrored.Filled.HelpOutline
 }
 
 @Composable
@@ -2247,16 +2390,11 @@ private fun calculateInsulinBreakdown(
 
     val correccionRaw = registro.registro.unidadesCorreccionSugerida ?: ((totalGuardado / factorContexto) - comidaBaseRaw)
     val correccion = if (kotlin.math.abs(correccionRaw) < 0.05f) 0f else correccionRaw
-    val totalMostrado = if (registro.registro.dosisConCorreccion == false) {
-        comida
-    } else {
-        totalGuardado
-    }
 
     return InsulinBreakdown(
         comida = comida,
         correccion = correccion,
-        total = totalMostrado
+        total = totalGuardado
     )
 }
 

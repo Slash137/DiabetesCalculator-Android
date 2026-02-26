@@ -78,7 +78,10 @@ import com.diabetes.calculator.ui.screens.perfil.PerfilScreen
 import com.diabetes.calculator.ui.screens.perfil.PerfilViewModel
 import com.diabetes.calculator.ui.screens.NightscoutViewModel
 import com.diabetes.calculator.ui.screens.NightscoutUiState
+import com.diabetes.calculator.data.repository.LibreviewRegistrosSyncSummary
 import com.diabetes.calculator.data.repository.NightscoutRegistrosSyncSummary
+import com.diabetes.calculator.util.LibreviewSecretStore
+import com.diabetes.calculator.work.LibreviewSyncWorker
 import com.diabetes.calculator.work.NightscoutSyncWorker
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -413,9 +416,11 @@ fun DiabetesNavGraph(app: DiabetesApp) {
                                 app.alimentoRepository,
                                 app.registroRepository,
                                 app.nightscoutRepository,
+                                app.nightscoutTreatmentTombstoneRepository,
                                 app.plantillaRepository,
                                 app.pendingGlucoseRepository,
                                 app.registroNightscoutSyncRepository,
+                                app.registroLibreviewSyncRepository,
                                 WorkManager.getInstance(app)
                             )
                         )
@@ -444,6 +449,8 @@ fun DiabetesNavGraph(app: DiabetesApp) {
                                 app.usuarioRepository,
                                 app.nightscoutTreatmentTombstoneRepository,
                                 app.nightscoutRepository,
+                                app.registroNightscoutSyncRepository,
+                                app.registroLibreviewSyncRepository,
                                 WorkManager.getInstance(app)
                             )
                         )
@@ -454,6 +461,9 @@ fun DiabetesNavGraph(app: DiabetesApp) {
                         val nightscoutImportCount by app.registroRepository.nightscoutImportCount.collectAsState(initial = 0)
                         val registroSyncSummary by app.registroNightscoutSyncRepository.summary.collectAsState(
                             initial = NightscoutRegistrosSyncSummary()
+                        )
+                        val libreviewSyncSummary by app.registroLibreviewSyncRepository.summary.collectAsState(
+                            initial = LibreviewRegistrosSyncSummary()
                         )
                         val pendingMaxAttempts = pendingGlucose.maxOfOrNull { it.attempts } ?: 0
                         val viewModel: PerfilViewModel = viewModel(
@@ -480,6 +490,26 @@ fun DiabetesNavGraph(app: DiabetesApp) {
                             },
                             onResyncRegistros30d = {
                                 NightscoutSyncWorker.enqueueResync30Days(WorkManager.getInstance(app))
+                            },
+                            libreviewRegistroSyncSummary = libreviewSyncSummary,
+                            onSyncLibreviewNow = { email, password ->
+                                LibreviewSyncWorker.enqueueNow(
+                                    workManager = WorkManager.getInstance(app),
+                                    forceManual = true,
+                                    emailOverride = email,
+                                    passwordOverride = password
+                                )
+                            },
+                            onAbortLibreviewOperation = {
+                                LibreviewSyncWorker.abortCurrentOperation(
+                                    workManager = WorkManager.getInstance(app)
+                                )
+                            },
+                            onResetLibreviewDevice = {
+                                LibreviewSyncWorker.abortCurrentOperation(
+                                    workManager = WorkManager.getInstance(app)
+                                )
+                                LibreviewSecretStore(app).resetDeviceIdentity()
                             }
                         )
                     }

@@ -9,15 +9,24 @@ import com.diabetes.calculator.data.entity.EstadoDosis
 import com.diabetes.calculator.data.entity.OrigenRegistro
 import com.diabetes.calculator.data.entity.PlantillaItem
 import com.diabetes.calculator.data.entity.UnidadConsumoAlimento
+import com.diabetes.calculator.data.repository.NightscoutRegistrosSyncService
 import com.diabetes.calculator.data.repository.NightscoutRepository
 import com.diabetes.calculator.data.repository.NightscoutTreatmentTombstoneRepository
 import com.diabetes.calculator.data.repository.PlantillaRepository
+import com.diabetes.calculator.data.repository.RegistroLibreviewSyncRepository
+import com.diabetes.calculator.data.repository.RegistroNightscoutSyncRepository
 import com.diabetes.calculator.data.repository.RegistroComidaRepository
 import com.diabetes.calculator.data.repository.UsuarioProfileRepository
+import com.diabetes.calculator.data.repository.LibreviewRegistrosSyncService
+import com.diabetes.calculator.data.repository.LibreviewRepository
+import com.diabetes.calculator.domain.SyncLinkTolerance
+import com.diabetes.calculator.work.LibreviewSyncWorker
 import com.diabetes.calculator.work.NightscoutSyncWorker
 import com.diabetes.calculator.work.Recordatorio2hScheduler
+import kotlin.math.max
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -58,6 +67,8 @@ class HistorialViewModel(
     private val usuarioRepository: UsuarioProfileRepository,
     private val nightscoutTreatmentTombstoneRepository: NightscoutTreatmentTombstoneRepository,
     private val nightscoutRepository: NightscoutRepository,
+    private val registroNightscoutSyncRepository: RegistroNightscoutSyncRepository,
+    private val registroLibreviewSyncRepository: RegistroLibreviewSyncRepository,
     private val workManager: WorkManager
 ) : ViewModel() {
     
@@ -73,6 +84,9 @@ class HistorialViewModel(
     private val _doseStatusFilter = MutableStateFlow(DoseStatusFilter.ALL)
     val doseStatusFilter: StateFlow<DoseStatusFilter> = _doseStatusFilter.asStateFlow()
 
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
     val factorCorreccionFallback: StateFlow<Float?> = usuarioRepository.profile
         .map { profile ->
             profile?.factorCorreccionMgdlPorU?.takeIf { it > 0f && !it.isNaN() }
@@ -82,9 +96,68 @@ class HistorialViewModel(
             SharingStarted.WhileSubscribed(5_000),
             null
         )
-    
+
+    val libreviewFailedRegistroIds: StateFlow<Set<Int>> = registroLibreviewSyncRepository.failedRegistroIds
+        .map { it.toSet() }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            emptySet()
+        )
+
+    val nightscoutPendingRegistroIds: StateFlow<Set<Int>> = registroNightscoutSyncRepository.pendingRegistroIds
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            emptySet()
+        )
+
+    private suspend fun buildLibreviewSyncService(): LibreviewRegistrosSyncService {
+        val profile = usuarioRepository.getProfileSync()
+        val linkMinutes = max(
+            profile?.nightscoutLinkOffsetMinutes?.coerceIn(0, 180) ?: SyncLinkTolerance.WINDOW_MINUTES,
+            SyncLinkTolerance.WINDOW_MINUTES
+        )
+        val linkUnits = max(
+            profile?.nightscoutLinkOffsetUnits?.coerceIn(0f, 5f) ?: SyncLinkTolerance.WINDOW_UNITS,
+            SyncLinkTolerance.WINDOW_UNITS
+        )
+        return LibreviewRegistrosSyncService(
+            registroRepository = repository,
+            queueRepository = registroLibreviewSyncRepository,
+            libreviewRepository = LibreviewRepository(),
+            linkMatchDeltaMillis = linkMinutes * 60_000L,
+            linkMatchInsulinDelta = linkUnits
+        )
+    }
+
     init {
         observeRegistros()
+        reconcileLocalDuplicatesNow()
+    }
+
+    private fun reconcileLocalDuplicatesNow() {
+        viewModelScope.launch {
+            val profile = usuarioRepository.getProfileSync()
+            val linkMinutes = max(
+                profile?.nightscoutLinkOffsetMinutes?.coerceIn(0, 180) ?: SyncLinkTolerance.WINDOW_MINUTES,
+                SyncLinkTolerance.WINDOW_MINUTES
+            )
+            val linkUnits = max(
+                profile?.nightscoutLinkOffsetUnits?.coerceIn(0f, 5f) ?: SyncLinkTolerance.WINDOW_UNITS,
+                SyncLinkTolerance.WINDOW_UNITS
+            )
+            NightscoutRegistrosSyncService(
+                registroRepository = repository,
+                queueRepository = registroNightscoutSyncRepository,
+                tombstoneRepository = nightscoutTreatmentTombstoneRepository,
+                nightscoutRepository = nightscoutRepository,
+                libreviewQueueRepository = registroLibreviewSyncRepository
+            ).reconcileLocalDuplicatesOnly(
+                linkOffsetMinutes = linkMinutes,
+                linkOffsetUnits = linkUnits
+            )
+        }
     }
     
     @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
@@ -136,13 +209,56 @@ class HistorialViewModel(
     fun updateDoseStatusFilter(filter: DoseStatusFilter) {
         _doseStatusFilter.value = filter
     }
+
+    fun refreshSyncNow() {
+        viewModelScope.launch {
+            if (_isRefreshing.value) return@launch
+            _isRefreshing.value = true
+            try {
+                val profile = usuarioRepository.getProfileSync()
+                if (profile != null) {
+                    val canSyncNightscout =
+                        profile.nightscoutSyncRegistrosActivo && !profile.nightscoutUrl.isNullOrBlank()
+                    if (canSyncNightscout) {
+                        NightscoutSyncWorker.enqueueNow(workManager, forceManual = true)
+                    }
+                    if (profile.libreviewSyncActivo) {
+                        LibreviewSyncWorker.enqueueNow(workManager, forceManual = true)
+                    }
+                }
+                delay(450L)
+            } finally {
+                _isRefreshing.value = false
+            }
+        }
+    }
     
     fun deleteRegistro(id: Int) {
         viewModelScope.launch {
+            val libreviewSyncService = buildLibreviewSyncService()
             val registro = repository.getRegistroRawById(id)
+            val profile = usuarioRepository.getProfileSync()
+            val hasLibreviewLink = registro?.libreviewCarbsRecordNumber != null ||
+                registro?.libreviewInsulinRecordNumber != null
+
+            if (registro != null && hasLibreviewLink && profile?.libreviewSyncActivo == true) {
+                // Si ya existe enlace remoto, encolamos delete remoto.
+                libreviewSyncService.enqueueDeleteForRegistro(registro)
+                LibreviewSyncWorker.enqueueNow(workManager, forceManual = true)
+            } else {
+                // Si aún no se subió, limpiamos colas locales inmediatamente.
+                registroLibreviewSyncRepository.deleteByRegistroId(id)
+            }
+
+            // Al borrar localmente, no debe quedar pendiente de subida a Nightscout.
+            registroNightscoutSyncRepository.deleteByRegistroId(id)
+
             val treatmentId = registro?.nightscoutTreatmentId
             if (!treatmentId.isNullOrBlank()) {
                 nightscoutTreatmentTombstoneRepository.add(treatmentId)
+                if (profile?.nightscoutSyncRegistrosActivo == true && !profile.nightscoutUrl.isNullOrBlank()) {
+                    NightscoutSyncWorker.enqueueNow(workManager, forceManual = true)
+                }
             }
             repository.deleteById(id)
         }
@@ -150,6 +266,7 @@ class HistorialViewModel(
 
     fun updateDoseStatus(registroId: Int, status: EstadoDosis) {
         viewModelScope.launch {
+            val libreviewSyncService = buildLibreviewSyncService()
             if (status == EstadoDosis.OMITIDA) {
                 val registro = repository.getRegistroRawById(registroId)
                 val treatmentId = registro?.nightscoutTreatmentId
@@ -159,11 +276,12 @@ class HistorialViewModel(
             }
             repository.updateDosisEstado(registroId, status)
 
+            val profile = usuarioRepository.getProfileSync()
+            val updatedRegistro = repository.getRegistroRawById(registroId)
+
             if (status == EstadoDosis.OMITIDA) {
                 Recordatorio2hScheduler.cancel(workManager, registroId)
             } else {
-                val profile = usuarioRepository.getProfileSync()
-                val updatedRegistro = repository.getRegistroRawById(registroId)
                 if (profile?.recordatorio2hActivo == true && updatedRegistro != null) {
                     val triggerAtMillis = when (status) {
                         EstadoDosis.APLICADA -> {
@@ -187,6 +305,25 @@ class HistorialViewModel(
             if (status == EstadoDosis.OMITIDA) {
                 repository.clearNightscoutLink(registroId)
             }
+
+            if (status == EstadoDosis.APLICADA &&
+                profile?.nightscoutSyncRegistrosActivo == true &&
+                !profile.nightscoutUrl.isNullOrBlank() &&
+                updatedRegistro != null &&
+                isLocalDoseOnlyRegistro(updatedRegistro)
+            ) {
+                registroNightscoutSyncRepository.upsertPending(registroId)
+                NightscoutSyncWorker.enqueueNow(workManager, forceManual = true)
+            }
+
+            if (profile?.libreviewSyncActivo == true && updatedRegistro != null) {
+                if (status == EstadoDosis.OMITIDA) {
+                    libreviewSyncService.enqueueDeleteForRegistro(updatedRegistro)
+                } else {
+                    libreviewSyncService.enqueueUpsertForRegistro(registroId)
+                }
+                LibreviewSyncWorker.enqueueNow(workManager, forceManual = true)
+            }
         }
     }
 
@@ -198,8 +335,24 @@ class HistorialViewModel(
 
     fun updateDoseForLink(registroId: Int, unidades: Float, confirmadaAt: Long?) {
         viewModelScope.launch {
+            val libreviewSyncService = buildLibreviewSyncService()
+            val previousTreatmentId = repository.getRegistroRawById(registroId)
+                ?.nightscoutTreatmentId
+                ?.takeIf { it.isNotBlank() }
             repository.updateDoseForLink(registroId, unidades, confirmadaAt)
-            NightscoutSyncWorker.enqueueNow(workManager, forceManual = true)
+            if (previousTreatmentId != null) {
+                nightscoutTreatmentTombstoneRepository.add(previousTreatmentId)
+            }
+            registroNightscoutSyncRepository.upsertPending(registroId)
+            NightscoutSyncWorker.enqueueNowForAnchor(
+                workManager = workManager,
+                anchorMillis = confirmadaAt ?: System.currentTimeMillis()
+            )
+            val profile = usuarioRepository.getProfileSync()
+            if (profile?.libreviewSyncActivo == true) {
+                libreviewSyncService.enqueueUpsertForRegistro(registroId)
+                LibreviewSyncWorker.enqueueNow(workManager, forceManual = true)
+            }
         }
     }
 
@@ -325,12 +478,21 @@ class HistorialViewModel(
         return list.filter { EstadoDosis.fromValue(it.registro.dosisEstado) == target }
     }
 
+    private fun isLocalDoseOnlyRegistro(registro: com.diabetes.calculator.data.entity.RegistroComida): Boolean {
+        if (OrigenRegistro.fromValue(registro.origenRegistro) != OrigenRegistro.LOCAL) return false
+        val units = registro.unidadesInsulina
+        if (!units.isFinite() || units <= 0f) return false
+        return registro.hidratosTotales <= 0f && registro.racionesCalculadas <= 0f
+    }
+
     class Factory(
         private val repository: RegistroComidaRepository,
         private val plantillaRepository: PlantillaRepository,
         private val usuarioRepository: UsuarioProfileRepository,
         private val nightscoutTreatmentTombstoneRepository: NightscoutTreatmentTombstoneRepository,
         private val nightscoutRepository: NightscoutRepository,
+        private val registroNightscoutSyncRepository: RegistroNightscoutSyncRepository,
+        private val registroLibreviewSyncRepository: RegistroLibreviewSyncRepository,
         private val workManager: WorkManager
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
@@ -342,6 +504,8 @@ class HistorialViewModel(
                     usuarioRepository,
                     nightscoutTreatmentTombstoneRepository,
                     nightscoutRepository,
+                    registroNightscoutSyncRepository,
+                    registroLibreviewSyncRepository,
                     workManager
                 ) as T
             }

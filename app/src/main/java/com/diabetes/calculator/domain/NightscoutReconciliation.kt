@@ -30,8 +30,8 @@ data class ReconciliationResult(
 )
 
 object NightscoutReconciliation {
-    const val MAX_DELTA_MINUTES = 15
-    const val MAX_DELTA_UNITS = 0.5f
+    const val MAX_DELTA_MINUTES = SyncLinkTolerance.WINDOW_MINUTES
+    const val MAX_DELTA_UNITS = SyncLinkTolerance.WINDOW_UNITS
 
     fun reconcile(
         locals: List<LocalInjectionCandidate>,

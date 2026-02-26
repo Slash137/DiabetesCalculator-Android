@@ -5,22 +5,29 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
+import androidx.sqlite.db.SimpleSQLiteQuery
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.diabetes.calculator.BuildConfig
 import com.diabetes.calculator.data.dao.AlimentoDao
+import com.diabetes.calculator.data.dao.LibreviewRecordCatalogDao
+import com.diabetes.calculator.data.dao.LibreviewRepairRunDao
 import com.diabetes.calculator.data.dao.NightscoutTreatmentTombstoneDao
 import com.diabetes.calculator.data.dao.PlantillaDao
 import com.diabetes.calculator.data.dao.PendingGlucoseDao
 import com.diabetes.calculator.data.dao.RegistroComidaDao
+import com.diabetes.calculator.data.dao.RegistroLibreviewSyncDao
 import com.diabetes.calculator.data.dao.RegistroNightscoutSyncDao
 import com.diabetes.calculator.data.dao.UsuarioProfileDao
 import com.diabetes.calculator.data.entity.Alimento
 import com.diabetes.calculator.data.entity.AlimentoEnRegistro
+import com.diabetes.calculator.data.entity.LibreviewRecordCatalog
+import com.diabetes.calculator.data.entity.LibreviewRepairRun
 import com.diabetes.calculator.data.entity.NightscoutTreatmentTombstone
 import com.diabetes.calculator.data.entity.PendingGlucose
 import com.diabetes.calculator.data.entity.PlantillaComida
 import com.diabetes.calculator.data.entity.PlantillaItem
 import com.diabetes.calculator.data.entity.RegistroComida
+import com.diabetes.calculator.data.entity.RegistroLibreviewSync
 import com.diabetes.calculator.data.entity.RegistroNightscoutSync
 import com.diabetes.calculator.data.entity.UsuarioProfile
 import kotlinx.coroutines.CoroutineScope
@@ -29,7 +36,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Base de datos Room principal de la aplicacion.
- * Version 19 con fallback destructivo solo en debug.
+ * Version 21 con fallback destructivo solo en debug.
  */
 @Database(
     entities = [
@@ -41,9 +48,12 @@ import kotlinx.coroutines.launch
         PlantillaItem::class,
         PendingGlucose::class,
         RegistroNightscoutSync::class,
+        RegistroLibreviewSync::class,
+        LibreviewRecordCatalog::class,
+        LibreviewRepairRun::class,
         NightscoutTreatmentTombstone::class
     ],
-    version = 19,
+    version = 22,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -54,6 +64,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun plantillaDao(): PlantillaDao
     abstract fun pendingGlucoseDao(): PendingGlucoseDao
     abstract fun registroNightscoutSyncDao(): RegistroNightscoutSyncDao
+    abstract fun registroLibreviewSyncDao(): RegistroLibreviewSyncDao
+    abstract fun libreviewRecordCatalogDao(): LibreviewRecordCatalogDao
+    abstract fun libreviewRepairRunDao(): LibreviewRepairRunDao
     abstract fun nightscoutTreatmentTombstoneDao(): NightscoutTreatmentTombstoneDao
     
     companion object {
@@ -86,7 +99,10 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_15_16,
                     MIGRATION_16_17,
                     MIGRATION_17_18,
-                    MIGRATION_18_19
+                    MIGRATION_18_19,
+                    MIGRATION_19_20,
+                    MIGRATION_20_21,
+                    MIGRATION_21_22
                 )
                 if (BuildConfig.DEBUG) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -398,6 +414,368 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_18_19 = object : Migration(18, 19) {
             override fun migrate(database: SupportSQLiteDatabase) {
                 database.execSQL("ALTER TABLE alimentos ADD COLUMN fotoUri TEXT")
+            }
+        }
+
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE usuario_profile ADD COLUMN libreviewSyncActivo INTEGER NOT NULL DEFAULT 1"
+                )
+                database.execSQL(
+                    "ALTER TABLE usuario_profile ADD COLUMN libreviewRegionOverride TEXT"
+                )
+                database.execSQL(
+                    "ALTER TABLE usuario_profile ADD COLUMN libreviewBackfillDoneAt INTEGER"
+                )
+
+                database.execSQL(
+                    "ALTER TABLE registro_comida ADD COLUMN libreviewCarbsRecordNumber INTEGER"
+                )
+                database.execSQL(
+                    "ALTER TABLE registro_comida ADD COLUMN libreviewInsulinRecordNumber INTEGER"
+                )
+                database.execSQL(
+                    "ALTER TABLE registro_comida ADD COLUMN libreviewCarbsPayloadHash TEXT"
+                )
+                database.execSQL(
+                    "ALTER TABLE registro_comida ADD COLUMN libreviewInsulinPayloadHash TEXT"
+                )
+                database.execSQL(
+                    "ALTER TABLE registro_comida ADD COLUMN libreviewReconciliadoAt INTEGER"
+                )
+
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_registro_comida_libreviewCarbsRecordNumber ON registro_comida(libreviewCarbsRecordNumber)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_registro_comida_libreviewInsulinRecordNumber ON registro_comida(libreviewInsulinRecordNumber)"
+                )
+
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS registro_libreview_sync (
+                        registroId INTEGER NOT NULL,
+                        channel TEXT NOT NULL,
+                        operation TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        attempts INTEGER NOT NULL DEFAULT 0,
+                        lastError TEXT,
+                        updatedAt INTEGER NOT NULL,
+                        recordNumber INTEGER,
+                        eventTimestampMillis INTEGER,
+                        amountValue REAL,
+                        payloadHash TEXT,
+                        PRIMARY KEY(registroId, channel)
+                    )
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_registro_libreview_sync_status ON registro_libreview_sync(status)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_registro_libreview_sync_updatedAt ON registro_libreview_sync(updatedAt)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_registro_libreview_sync_channel ON registro_libreview_sync(channel)"
+                )
+            }
+        }
+
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                addColumnIfMissing(
+                    database = database,
+                    table = "usuario_profile",
+                    column = "libreviewSyncActivo",
+                    definition = "INTEGER NOT NULL DEFAULT 1"
+                )
+                addColumnIfMissing(
+                    database = database,
+                    table = "usuario_profile",
+                    column = "libreviewRegionOverride",
+                    definition = "TEXT"
+                )
+                addColumnIfMissing(
+                    database = database,
+                    table = "usuario_profile",
+                    column = "libreviewBackfillDoneAt",
+                    definition = "INTEGER"
+                )
+
+                addColumnIfMissing(
+                    database = database,
+                    table = "registro_comida",
+                    column = "libreviewCarbsRecordNumber",
+                    definition = "INTEGER"
+                )
+                addColumnIfMissing(
+                    database = database,
+                    table = "registro_comida",
+                    column = "libreviewInsulinRecordNumber",
+                    definition = "INTEGER"
+                )
+                addColumnIfMissing(
+                    database = database,
+                    table = "registro_comida",
+                    column = "libreviewCarbsPayloadHash",
+                    definition = "TEXT"
+                )
+                addColumnIfMissing(
+                    database = database,
+                    table = "registro_comida",
+                    column = "libreviewInsulinPayloadHash",
+                    definition = "TEXT"
+                )
+                addColumnIfMissing(
+                    database = database,
+                    table = "registro_comida",
+                    column = "libreviewReconciliadoAt",
+                    definition = "INTEGER"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_registro_comida_libreviewCarbsRecordNumber ON registro_comida(libreviewCarbsRecordNumber)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_registro_comida_libreviewInsulinRecordNumber ON registro_comida(libreviewInsulinRecordNumber)"
+                )
+
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS registro_libreview_sync_new (
+                        registroId INTEGER NOT NULL,
+                        channel TEXT NOT NULL,
+                        operation TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        attempts INTEGER NOT NULL DEFAULT 0,
+                        lastError TEXT,
+                        updatedAt INTEGER NOT NULL,
+                        recordNumber INTEGER,
+                        eventTimestampMillis INTEGER,
+                        amountValue REAL,
+                        payloadHash TEXT,
+                        PRIMARY KEY(registroId, channel)
+                    )
+                    """.trimIndent()
+                )
+                if (tableExists(database, "registro_libreview_sync")) {
+                    database.execSQL(
+                        """
+                        INSERT OR REPLACE INTO registro_libreview_sync_new (
+                            registroId,
+                            channel,
+                            operation,
+                            status,
+                            attempts,
+                            lastError,
+                            updatedAt,
+                            recordNumber,
+                            eventTimestampMillis,
+                            amountValue,
+                            payloadHash
+                        )
+                        SELECT
+                            registroId,
+                            channel,
+                            operation,
+                            status,
+                            attempts,
+                            lastError,
+                            updatedAt,
+                            recordNumber,
+                            eventTimestampMillis,
+                            amountValue,
+                            payloadHash
+                        FROM registro_libreview_sync
+                        """.trimIndent()
+                    )
+                    database.execSQL("DROP TABLE registro_libreview_sync")
+                }
+                database.execSQL("ALTER TABLE registro_libreview_sync_new RENAME TO registro_libreview_sync")
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_registro_libreview_sync_status ON registro_libreview_sync(status)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_registro_libreview_sync_updatedAt ON registro_libreview_sync(updatedAt)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_registro_libreview_sync_channel ON registro_libreview_sync(channel)"
+                )
+            }
+        }
+
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS libreview_record_catalog (
+                        channel TEXT NOT NULL,
+                        recordNumber INTEGER NOT NULL,
+                        sourceRegistroId INTEGER,
+                        firstSeenAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        lastOperation TEXT,
+                        payloadHash TEXT,
+                        PRIMARY KEY(channel, recordNumber)
+                    )
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_libreview_record_catalog_updatedAt ON libreview_record_catalog(updatedAt)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_libreview_record_catalog_sourceRegistroId ON libreview_record_catalog(sourceRegistroId)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_libreview_record_catalog_channel_updatedAt ON libreview_record_catalog(channel, updatedAt)"
+                )
+
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS libreview_repair_run (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        startedAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        finishedAt INTEGER,
+                        status TEXT NOT NULL,
+                        phase TEXT NOT NULL,
+                        canonicalRecords INTEGER NOT NULL DEFAULT 0,
+                        knownManagedCount INTEGER NOT NULL DEFAULT 0,
+                        unknownOverlapCount INTEGER NOT NULL DEFAULT 0,
+                        foreignCount INTEGER NOT NULL DEFAULT 0,
+                        deletePlanned INTEGER NOT NULL DEFAULT 0,
+                        deleteSucceeded INTEGER NOT NULL DEFAULT 0,
+                        deleteFailedTolerated INTEGER NOT NULL DEFAULT 0,
+                        upsertPlanned INTEGER NOT NULL DEFAULT 0,
+                        upsertSucceeded INTEGER NOT NULL DEFAULT 0,
+                        upsertFailed INTEGER NOT NULL DEFAULT 0,
+                        blockedReason TEXT,
+                        snapshotJson TEXT,
+                        reportJson TEXT
+                    )
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_libreview_repair_run_status ON libreview_repair_run(status)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_libreview_repair_run_phase ON libreview_repair_run(phase)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_libreview_repair_run_updatedAt ON libreview_repair_run(updatedAt)"
+                )
+
+                val nowExpr = "(CAST(strftime('%s','now') AS INTEGER) * 1000)"
+                database.execSQL(
+                    """
+                    INSERT OR REPLACE INTO libreview_record_catalog (
+                        channel,
+                        recordNumber,
+                        sourceRegistroId,
+                        firstSeenAt,
+                        updatedAt,
+                        lastOperation,
+                        payloadHash
+                    )
+                    SELECT
+                        'CARBS',
+                        libreviewCarbsRecordNumber,
+                        id,
+                        COALESCE(libreviewReconciliadoAt, $nowExpr),
+                        COALESCE(libreviewReconciliadoAt, $nowExpr),
+                        'UPSERT',
+                        libreviewCarbsPayloadHash
+                    FROM registro_comida
+                    WHERE libreviewCarbsRecordNumber IS NOT NULL
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    INSERT OR REPLACE INTO libreview_record_catalog (
+                        channel,
+                        recordNumber,
+                        sourceRegistroId,
+                        firstSeenAt,
+                        updatedAt,
+                        lastOperation,
+                        payloadHash
+                    )
+                    SELECT
+                        'NFC_INSULIN',
+                        libreviewInsulinRecordNumber,
+                        id,
+                        COALESCE(libreviewReconciliadoAt, $nowExpr),
+                        COALESCE(libreviewReconciliadoAt, $nowExpr),
+                        'UPSERT',
+                        libreviewInsulinPayloadHash
+                    FROM registro_comida
+                    WHERE libreviewInsulinRecordNumber IS NOT NULL
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    INSERT OR REPLACE INTO libreview_record_catalog (
+                        channel,
+                        recordNumber,
+                        sourceRegistroId,
+                        firstSeenAt,
+                        updatedAt,
+                        lastOperation,
+                        payloadHash
+                    )
+                    SELECT
+                        channel,
+                        recordNumber,
+                        CASE WHEN registroId > 0 THEN registroId ELSE NULL END,
+                        COALESCE(updatedAt, $nowExpr),
+                        COALESCE(updatedAt, $nowExpr),
+                        operation,
+                        payloadHash
+                    FROM registro_libreview_sync
+                    WHERE recordNumber IS NOT NULL
+                    """.trimIndent()
+                )
+            }
+        }
+
+        private fun addColumnIfMissing(
+            database: SupportSQLiteDatabase,
+            table: String,
+            column: String,
+            definition: String
+        ) {
+            if (!columnExists(database, table, column)) {
+                database.execSQL("ALTER TABLE $table ADD COLUMN $column $definition")
+            }
+        }
+
+        private fun columnExists(
+            database: SupportSQLiteDatabase,
+            table: String,
+            column: String
+        ): Boolean {
+            database.query(SimpleSQLiteQuery("PRAGMA table_info($table)")).use { cursor ->
+                val nameIndex = cursor.getColumnIndex("name")
+                while (cursor.moveToNext()) {
+                    if (nameIndex >= 0 && cursor.getString(nameIndex) == column) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private fun tableExists(
+            database: SupportSQLiteDatabase,
+            table: String
+        ): Boolean {
+            database.query(
+                SimpleSQLiteQuery(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                    arrayOf(table)
+                )
+            ).use { cursor ->
+                return cursor.moveToFirst()
             }
         }
     }

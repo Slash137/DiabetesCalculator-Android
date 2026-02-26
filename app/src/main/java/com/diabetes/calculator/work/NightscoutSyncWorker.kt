@@ -16,6 +16,7 @@ import com.diabetes.calculator.data.repository.NightscoutRegistrosSyncService
 import com.diabetes.calculator.data.repository.NightscoutRepository
 import com.diabetes.calculator.data.repository.NightscoutTreatmentTombstoneRepository
 import com.diabetes.calculator.data.repository.RegistroComidaRepository
+import com.diabetes.calculator.data.repository.RegistroLibreviewSyncRepository
 import com.diabetes.calculator.data.repository.RegistroNightscoutSyncRepository
 import com.diabetes.calculator.data.repository.UsuarioProfileRepository
 import com.diabetes.calculator.util.NightscoutRetryPolicy
@@ -33,32 +34,46 @@ class NightscoutSyncWorker(
         val profileRepository = UsuarioProfileRepository(database.usuarioProfileDao(), tokenStore)
         val profile = profileRepository.getProfileSync() ?: return Result.success()
         val forceManual = inputData.getBoolean(KEY_FORCE_MANUAL, false)
+        val syncAnchorMillis = inputData.getLong(KEY_SYNC_ANCHOR_MILLIS, -1L).takeIf { it > 0L }
         if (!forceManual && !profile.nightscoutSyncRegistrosActivo) return Result.success()
         if (profile.nightscoutUrl.isNullOrBlank()) return Result.success()
 
+        val registroRepository = RegistroComidaRepository(database.registroComidaDao())
         val queueRepository = RegistroNightscoutSyncRepository(database.registroNightscoutSyncDao())
+        val libreviewQueueRepository = RegistroLibreviewSyncRepository(database.registroLibreviewSyncDao())
         val service = NightscoutRegistrosSyncService(
-            registroRepository = RegistroComidaRepository(database.registroComidaDao()),
+            registroRepository = registroRepository,
             queueRepository = queueRepository,
             tombstoneRepository = NightscoutTreatmentTombstoneRepository(database.nightscoutTreatmentTombstoneDao()),
-            nightscoutRepository = NightscoutRepository()
+            nightscoutRepository = NightscoutRepository(),
+            libreviewQueueRepository = libreviewQueueRepository
         )
 
         val now = System.currentTimeMillis()
         val manualResyncDays = inputData.getInt(KEY_RESYNC_DAYS, 0)
         val manualIgnoreTombstones = inputData.getBoolean(KEY_IGNORE_TOMBSTONES, false)
         val needsInitialBackfill = profile.nightscoutSyncBackfillDoneAt == null
+        val oldestUploadableMillis = if (forceManual || needsInitialBackfill) {
+            registroRepository.getOldestUploadableTimestamp()
+        } else {
+            null
+        }
 
         val fromMillis = when {
+            syncAnchorMillis != null -> syncAnchorMillis - SYNC_ANCHOR_WINDOW_MILLIS
             manualResyncDays > 0 -> now - manualResyncDays * DAY_MILLIS
-            forceManual -> now - DEFAULT_BACKFILL_DAYS * DAY_MILLIS
-            needsInitialBackfill -> now - DEFAULT_BACKFILL_DAYS * DAY_MILLIS
+            forceManual -> oldestUploadableMillis ?: now - DEFAULT_BACKFILL_DAYS * DAY_MILLIS
+            needsInitialBackfill -> oldestUploadableMillis ?: now - DEFAULT_BACKFILL_DAYS * DAY_MILLIS
             else -> now - INCREMENTAL_WINDOW_MILLIS
         }
-        val toMillis = now
+        val toMillis = when {
+            syncAnchorMillis != null -> syncAnchorMillis + SYNC_ANCHOR_WINDOW_MILLIS
+            else -> now
+        }
         val ignoreTombstones = manualResyncDays > 0 && manualIgnoreTombstones
-        val enqueueAllLocalRecords = forceManual && manualResyncDays <= 0
+        val enqueueAllLocalRecords = forceManual && manualResyncDays <= 0 && syncAnchorMillis == null
         val enqueueFromMillis = if (manualResyncDays > 0) fromMillis else null
+        val fullHistoricalReconcile = enqueueAllLocalRecords || needsInitialBackfill
 
         val runResult = runCatching {
             service.sync(
@@ -67,7 +82,8 @@ class NightscoutSyncWorker(
                 toMillis = toMillis,
                 ignoreTombstones = ignoreTombstones,
                 enqueueAllLocalRecords = enqueueAllLocalRecords,
-                enqueueFromMillis = enqueueFromMillis
+                enqueueFromMillis = enqueueFromMillis,
+                fullHistoricalReconcile = fullHistoricalReconcile
             )
         }.getOrElse {
             val delay = NightscoutRetryPolicy.nextDelayMinutes(1)
@@ -93,9 +109,11 @@ class NightscoutSyncWorker(
         private const val KEY_RESYNC_DAYS = "resync_days"
         private const val KEY_IGNORE_TOMBSTONES = "ignore_tombstones"
         private const val KEY_FORCE_MANUAL = "force_manual"
+        private const val KEY_SYNC_ANCHOR_MILLIS = "sync_anchor_millis"
         private const val DEFAULT_BACKFILL_DAYS = 30L
         private const val DAY_MILLIS = 24L * 60L * 60L * 1000L
         private const val INCREMENTAL_WINDOW_MILLIS = 24L * 60L * 60L * 1000L
+        private const val SYNC_ANCHOR_WINDOW_MILLIS = 24L * 60L * 60L * 1000L
 
         fun enqueuePeriodic(workManager: WorkManager) {
             val constraints = Constraints.Builder()
@@ -120,6 +138,29 @@ class NightscoutSyncWorker(
                 .setInputData(
                     workDataOf(
                         KEY_FORCE_MANUAL to forceManual
+                    )
+                )
+                .build()
+            workManager.enqueueUniqueWork(
+                WORK_NAME_NOW,
+                ExistingWorkPolicy.REPLACE,
+                request
+            )
+        }
+
+        fun enqueueNowForAnchor(
+            workManager: WorkManager,
+            anchorMillis: Long
+        ) {
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+            val request = OneTimeWorkRequestBuilder<NightscoutSyncWorker>()
+                .setConstraints(constraints)
+                .setInputData(
+                    workDataOf(
+                        KEY_FORCE_MANUAL to true,
+                        KEY_SYNC_ANCHOR_MILLIS to anchorMillis
                     )
                 )
                 .build()

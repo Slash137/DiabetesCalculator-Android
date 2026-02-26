@@ -1,5 +1,6 @@
 package com.diabetes.calculator.ui.screens.nuevacomida
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -51,6 +53,8 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.pulltorefresh.PullToRefreshContainer
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -63,6 +67,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -91,6 +96,7 @@ import com.diabetes.calculator.domain.FranjaHoraria
 import com.diabetes.calculator.domain.NivelEjercicio
 import com.diabetes.calculator.domain.NivelEnfermedad
 import com.diabetes.calculator.domain.NivelEstres
+import com.diabetes.calculator.domain.ActiveInsulinDoseContribution
 import com.diabetes.calculator.domain.ActiveInsulinSnapshot
 import com.diabetes.calculator.ui.components.ActiveInsulinIndicatorCard
 import com.diabetes.calculator.ui.components.AvisoMedico
@@ -98,7 +104,7 @@ import com.diabetes.calculator.ui.theme.HidratosColor
 import com.diabetes.calculator.ui.theme.InsulinaColor
 import com.diabetes.calculator.ui.theme.RacionesColor
 import com.diabetes.calculator.ui.theme.WarningColor
-import androidx.compose.foundation.rememberScrollState
+import com.diabetes.calculator.util.DateUtils
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import java.util.Locale
@@ -125,7 +131,7 @@ fun NuevaComidaScreen(
     val notas by viewModel.notas.collectAsState()
     val activeInsulinSnapshot by viewModel.activeInsulinSnapshot.collectAsState()
     val activeInsulinLoading by viewModel.activeInsulinLoading.collectAsState()
-    val dosisConCorreccion by viewModel.dosisConCorreccion.collectAsState()
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
     val franjaHoraria by viewModel.franjaHoraria.collectAsState()
     val nivelEstres by viewModel.nivelEstres.collectAsState()
     val nivelEnfermedad by viewModel.nivelEnfermedad.collectAsState()
@@ -199,11 +205,11 @@ fun NuevaComidaScreen(
                     items = items,
                     calculo = calculo,
                     isSaving = isSaving,
+                    isRefreshing = isRefreshing,
                     searchQuery = searchQuery,
                     notas = notas,
                     activeInsulinSnapshot = activeInsulinSnapshot,
                     activeInsulinLoading = activeInsulinLoading,
-                    dosisConCorreccion = dosisConCorreccion,
                     manualGlucosaFallbackInput = manualGlucosaFallbackInput,
                     allowManualGlucosaFallback = allowManualGlucosaFallback,
                     franjaHoraria = franjaHoraria,
@@ -215,7 +221,6 @@ fun NuevaComidaScreen(
                     plantillas = plantillas,
                     onSearchQueryChange = viewModel::updateSearchQuery,
                     onNotasChange = viewModel::updateNotas,
-                    onDosisConCorreccionChange = viewModel::updateDosisConCorreccion,
                     onManualGlucosaFallbackChange = viewModel::updateManualGlucosaFallback,
                     onFranjaHorariaChange = viewModel::updateFranjaHoraria,
                     onNivelEstresChange = viewModel::updateNivelEstres,
@@ -227,6 +232,7 @@ fun NuevaComidaScreen(
                     onUpdateItemAlimento = viewModel::updateItemAlimento,
                     onUpdateItemCantidad = viewModel::updateItemCantidad,
                     onSave = viewModel::saveRegistro,
+                    onRefresh = viewModel::refreshData,
                     canSave = viewModel.canSave(),
                     onOpenPlantillas = { showPlantillasDialog = true },
                     onSavePlantilla = { showSavePlantillaDialog = true }
@@ -333,16 +339,17 @@ private fun NoProfileView(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun NuevaComidaContent(
     alimentos: List<Alimento>,
     items: List<ItemComidaTemporal>,
     calculo: CalculoActual,
     isSaving: Boolean,
+    isRefreshing: Boolean,
     searchQuery: String,
     notas: String,
     activeInsulinSnapshot: ActiveInsulinSnapshot,
     activeInsulinLoading: Boolean,
-    dosisConCorreccion: Boolean,
     manualGlucosaFallbackInput: String,
     allowManualGlucosaFallback: Boolean,
     franjaHoraria: FranjaHoraria,
@@ -354,7 +361,6 @@ private fun NuevaComidaContent(
     plantillas: List<PlantillaConItems>,
     onSearchQueryChange: (String) -> Unit,
     onNotasChange: (String) -> Unit,
-    onDosisConCorreccionChange: (Boolean) -> Unit,
     onManualGlucosaFallbackChange: (String) -> Unit,
     onFranjaHorariaChange: (FranjaHoraria) -> Unit,
     onNivelEstresChange: (NivelEstres) -> Unit,
@@ -366,16 +372,36 @@ private fun NuevaComidaContent(
     onUpdateItemAlimento: (ItemComidaTemporal, Alimento) -> Unit,
     onUpdateItemCantidad: (ItemComidaTemporal, String) -> Unit,
     onSave: () -> Unit,
+    onRefresh: () -> Unit,
     canSave: Boolean,
     onOpenPlantillas: () -> Unit,
     onSavePlantilla: () -> Unit
 ) {
     var showContextEditor by remember { mutableStateOf(false) }
     var showFactorBreakdown by remember { mutableStateOf(false) }
+    var showActiveInsulinBreakdownDialog by remember { mutableStateOf(false) }
+    var formExpanded by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
+    val pullToRefreshState = rememberPullToRefreshState(enabled = { !isSaving })
+
+    LaunchedEffect(pullToRefreshState.isRefreshing) {
+        if (pullToRefreshState.isRefreshing && !isRefreshing && !isSaving) {
+            onRefresh()
+        }
+    }
+
+    LaunchedEffect(isRefreshing) {
+        if (isRefreshing && !pullToRefreshState.isRefreshing) {
+            pullToRefreshState.startRefresh()
+        } else if (!isRefreshing && pullToRefreshState.isRefreshing) {
+            pullToRefreshState.endRefresh()
+        }
+    }
 
     Box(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .nestedScroll(pullToRefreshState.nestedScrollConnection),
         contentAlignment = Alignment.TopCenter
     ) {
         Column(
@@ -386,120 +412,134 @@ private fun NuevaComidaContent(
                 .verticalScroll(scrollState),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                text = "Composición de la comida",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary
+            FormCollapseControl(
+                expanded = formExpanded,
+                onToggle = { formExpanded = !formExpanded }
             )
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                OutlinedButton(
-                    onClick = onOpenPlantillas,
-                    modifier = Modifier.weight(1f),
-                    enabled = !isSaving,
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("Plantillas")
-                }
-                OutlinedButton(
-                    onClick = onSavePlantilla,
-                    modifier = Modifier.weight(1f),
-                    enabled = !isSaving,
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("Guardar plantilla")
-                }
-            }
-
-            // Lista de items actuales
-            items.forEachIndexed { index, item ->
-                ItemComidaRow(
-                    index = index,
-                    item = item,
-                    alimentosFiltrados = alimentos,
-                    searchQuery = searchQuery,
-                    onSearchQueryChange = onSearchQueryChange,
-                    onUpdateAlimento = { onUpdateItemAlimento(item, it) },
-                    onUpdateCantidad = { onUpdateItemCantidad(item, it) },
-                    onRemove = { onRemoveItem(item) },
-                    isOnlyItem = items.size == 1,
-                    enabled = !isSaving
-                )
-            }
-
-            // Botón Sumar Alimento
-            OutlinedButton(
-                onClick = onAddItem,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !isSaving,
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Añadir alimento")
-            }
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
-                ),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
+            AnimatedVisibility(visible = formExpanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     Text(
-                        text = "Factores contextuales",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
+                        text = "Composición de la comida",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary
                     )
-                    Text(
-                        text = "Ajustan la dosis final con límite de seguridad ±40%.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    val contextSummaryChips = buildContextSummaryChips(
-                        franjaHoraria = franjaHoraria,
-                        nivelEstres = nivelEstres,
-                        nivelEnfermedad = nivelEnfermedad,
-                        faseCiclo = faseCiclo,
-                        nivelEjercicio = nivelEjercicio,
-                        colors = MaterialTheme.colorScheme
-                    )
-                    if (contextSummaryChips.isNotEmpty()) {
-                        ContextInfoChipsRow(chips = contextSummaryChips)
-                    }
-                    OutlinedButton(
-                        onClick = { showContextEditor = true },
-                        enabled = !isSaving,
+
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onOpenPlantillas,
+                            modifier = Modifier.weight(1f),
+                            enabled = !isSaving,
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("Plantillas")
+                        }
+                        OutlinedButton(
+                            onClick = onSavePlantilla,
+                            modifier = Modifier.weight(1f),
+                            enabled = !isSaving,
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("Guardar plantilla")
+                        }
+                    }
+
+                    // Lista de items actuales
+                    items.forEachIndexed { index, item ->
+                        ItemComidaRow(
+                            index = index,
+                            item = item,
+                            alimentosFiltrados = alimentos,
+                            searchQuery = searchQuery,
+                            onSearchQueryChange = onSearchQueryChange,
+                            onUpdateAlimento = { onUpdateItemAlimento(item, it) },
+                            onUpdateCantidad = { onUpdateItemCantidad(item, it) },
+                            onRemove = { onRemoveItem(item) },
+                            isOnlyItem = items.size == 1,
+                            enabled = !isSaving
+                        )
+                    }
+
+                    // Botón Sumar Alimento
+                    OutlinedButton(
+                        onClick = onAddItem,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isSaving,
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text("Editar factores")
+                        Icon(Icons.Default.Add, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Añadir alimento")
                     }
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer
+                        ),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "Factores contextuales",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Ajustan la dosis final con límite de seguridad ±40%.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            val contextSummaryChips = buildContextSummaryChips(
+                                franjaHoraria = franjaHoraria,
+                                nivelEstres = nivelEstres,
+                                nivelEnfermedad = nivelEnfermedad,
+                                faseCiclo = faseCiclo,
+                                nivelEjercicio = nivelEjercicio,
+                                colors = MaterialTheme.colorScheme
+                            )
+                            if (contextSummaryChips.isNotEmpty()) {
+                                ContextInfoChipsRow(chips = contextSummaryChips)
+                            }
+                            OutlinedButton(
+                                onClick = { showContextEditor = true },
+                                enabled = !isSaving,
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("Editar factores")
+                            }
+                        }
+                    }
+
+                    // Campo de Notas
+                    OutlinedTextField(
+                        value = notas,
+                        onValueChange = onNotasChange,
+                        label = { Text("Notas") },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("Ej: Comida familiar, cena fuera...") },
+                        enabled = !isSaving,
+                        shape = RoundedCornerShape(12.dp)
+                    )
                 }
             }
-
-            // Campo de Notas
-            OutlinedTextField(
-                value = notas,
-                onValueChange = onNotasChange,
-                label = { Text("Notas") },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Ej: Comida familiar, cena fuera...") },
-                enabled = !isSaving,
-                shape = RoundedCornerShape(12.dp)
-            )
 
             ActiveInsulinIndicatorCard(
                 snapshot = activeInsulinSnapshot,
                 isLoading = activeInsulinLoading,
-                title = "Insulina activa actual"
+                title = "Insulina activa actual",
+                onClick = {
+                    if (!activeInsulinLoading) {
+                        showActiveInsulinBreakdownDialog = true
+                    }
+                }
             )
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
@@ -558,29 +598,19 @@ private fun NuevaComidaContent(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column {
-                                val modoDosis = if (dosisConCorreccion) {
-                                    "Con corrección"
-                                } else {
-                                    "Sin corrección"
-                                }
                                 Text(
                                     text = "Insulina recomendada",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onPrimaryContainer
                                 )
                                 Text(
-                                    text = "Dosis sugerida ($modoDosis)",
+                                    text = "Dosis final automática",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                                 )
                             }
-                            val dosisMostrada = if (dosisConCorreccion) {
-                                calculo.unidadesInsulina
-                            } else {
-                                calculo.unidadesInsulinaSinCorreccion
-                            }
                             Text(
-                                text = "${String.format(Locale.getDefault(), "%.1f", dosisMostrada)} U",
+                                text = "${String.format(Locale.getDefault(), "%.1f", calculo.unidadesInsulina)} U",
                                 style = MaterialTheme.typography.headlineMedium,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = MaterialTheme.colorScheme.primary
@@ -605,121 +635,7 @@ private fun NuevaComidaContent(
                         )
                     }
 
-                    val trendArrow = CgmTrendCorrection.trendArrow(calculo.tendenciaDireccion)
-                    val fuenteTexto = when (calculo.glucosaFuente) {
-                        CgmSource.NIGHTSCOUT -> "Nightscout (autoridad)"
-                        CgmSource.MANUAL_FALLBACK -> "Manual (fallback)"
-                        null -> "Sin dato de glucosa"
-                    }
-                    val lecturaDetalle = when (calculo.glucosaFuente) {
-                        CgmSource.NIGHTSCOUT -> {
-                            val edad = calculo.glucosaEdadMinutos?.let { " · hace ${it}m" }.orEmpty()
-                            val valor = calculo.glucosaUsadaMgdl?.toString() ?: "N/D"
-                            "Glucosa usada: $valor mg/dL $trendArrow$edad"
-                        }
-                        CgmSource.MANUAL_FALLBACK -> {
-                            val valor = calculo.glucosaUsadaMgdl?.toString() ?: "N/D"
-                            "Glucosa usada: $valor mg/dL"
-                        }
-                        null -> "Glucosa usada: N/D"
-                    }
-                    Text(
-                        text = "Fuente de glucosa: $fuenteTexto",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = lecturaDetalle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (calculo.glucosaFuente == CgmSource.NIGHTSCOUT && calculo.glucosaProyectadaMgdl != null) {
-                        Text(
-                            text = "Glucosa proyectada (30 min): ${calculo.glucosaProyectadaMgdl} mg/dL",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = "Ajuste por tendencia: ${if (calculo.ajusteTendenciaRaw >= 0f) "+" else ""}${String.format(Locale.getDefault(), "%.1f", calculo.ajusteTendenciaRaw)} U",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    if (kotlin.math.abs(calculo.unidadesCorreccionBruta) >= 0.05f ||
-                        calculo.unidadesCorreccionReducidaPorActiva > 0f ||
-                        calculo.unidadesComidaReducidaPorActiva > 0f
-                    ) {
-                        Text(
-                            text = "Insulina por comida (sin corrección glucosa): ${String.format(Locale.getDefault(), "%.1f", calculo.unidadesInsulinaSinCorreccion)} U",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        if (calculo.unidadesComidaReducidaPorActiva > 0f) {
-                            Text(
-                                text = "Ajuste por insulina activa en dosis base: -${String.format(Locale.getDefault(), "%.1f", calculo.unidadesComidaReducidaPorActiva)} U",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        val glucosaActual = calculo.glucosaUsadaMgdl
-                        val signo = if (calculo.unidadesCorreccion >= 0f) "+" else ""
-
-                        if (glucosaActual != null) {
-                            Text(
-                                text = "Corrección por glucosa ($glucosaActual mg/dL): $signo${String.format(Locale.getDefault(), "%.1f",calculo.unidadesCorreccion)} U",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        } else {
-                            Text(
-                                text = "Corrección por glucosa: $signo${String.format(Locale.getDefault(), "%.1f", calculo.unidadesCorreccion)} U",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-
-                        if (calculo.unidadesCorreccionReducidaPorActiva > 0f) {
-                            Text(
-                                text = "Ajuste por insulina activa (${String.format(Locale.getDefault(), "%.1f", calculo.insulinaActivaActual)} U): -${String.format(Locale.getDefault(), "%.1f", calculo.unidadesCorreccionReducidaPorActiva)} U",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    Text(
-                        text = "Factor contexto total: x${String.format(Locale.getDefault(), "%.2f", calculo.factorContextoTotalAplicado)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (calculo.factorContextoCapado) {
-                        Text(
-                            text = "Valor original: x${String.format(Locale.getDefault(), "%.2f", calculo.factorContextoTotalRaw)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                        Text(
-                            text = "Se aplicó límite de seguridad (x0.60 a x1.40).",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-
-                    Text(
-                        text = "Corrección por glucosa alta",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    CorrectionModeSelector(
-                        conCorreccion = dosisConCorreccion,
-                        onChange = onDosisConCorreccionChange,
-                        enabled = !isSaving
-                    )
+                    InsulinDoseBreakdown(calculo = calculo)
 
                     Button(
                         onClick = onSave,
@@ -774,6 +690,11 @@ private fun NuevaComidaContent(
             Spacer(modifier = Modifier.height(16.dp))
         }
 
+        PullToRefreshContainer(
+            state = pullToRefreshState,
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
+
         if (showContextEditor) {
             ContextFactorsDialog(
                 franjaHoraria = franjaHoraria,
@@ -789,6 +710,80 @@ private fun NuevaComidaContent(
                 onFaseCicloChange = onFaseCicloChange,
                 onNivelEjercicioChange = onNivelEjercicioChange,
                 onDismiss = { showContextEditor = false }
+            )
+        }
+
+        if (showActiveInsulinBreakdownDialog) {
+            ActiveInsulinBreakdownDialog(
+                snapshot = activeInsulinSnapshot,
+                onDismiss = { showActiveInsulinBreakdownDialog = false }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ActiveInsulinBreakdownDialog(
+    snapshot: ActiveInsulinSnapshot,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Desglose de insulina activa") },
+        text = {
+            if (snapshot.contributions.isEmpty()) {
+                Text("No hay dosis activas en las últimas 4 horas.")
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    snapshot.contributions.forEach { contribution ->
+                        ActiveInsulinContributionRow(contribution = contribution)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cerrar")
+            }
+        },
+        shape = RoundedCornerShape(20.dp)
+    )
+}
+
+@Composable
+private fun ActiveInsulinContributionRow(
+    contribution: ActiveInsulinDoseContribution
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = DateUtils.getRelativeDate(contribution.eventMillis),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "${String.format(Locale.getDefault(), "%.1f", contribution.originalUnits)} U originales",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "${String.format(Locale.getDefault(), "%.2f", contribution.activeUnits)} U activas · ${contribution.minutesRemaining} min restantes",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -914,49 +909,295 @@ private fun ContextFactorsDialog(
 }
 
 @Composable
-private fun CorrectionModeSelector(
-    conCorreccion: Boolean,
-    onChange: (Boolean) -> Unit,
-    enabled: Boolean
+private fun FormCollapseControl(
+    expanded: Boolean,
+    onToggle: () -> Unit
 ) {
-    Row(
+    Card(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        ),
+        shape = RoundedCornerShape(12.dp)
     ) {
-        FilterChip(
-            selected = conCorreccion,
-            onClick = { onChange(true) },
-            enabled = enabled,
-            label = {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Dosis ajustada",
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Ellipsis
+                    text = "Formulario de nueva comida",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold
                 )
-            },
-            modifier = Modifier.weight(1f),
-            colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer
+                Text(
+                    text = if (expanded) {
+                        "Puedes ocultarlo para centrarte en insulina activa y resumen."
+                    } else {
+                        "Formulario oculto."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            TextButton(onClick = onToggle) {
+                Text(if (expanded) "Ocultar" else "Mostrar")
+            }
+        }
+    }
+}
+
+private enum class BreakdownTone {
+    Neutral,
+    Emphasis,
+    Positive,
+    Reduction,
+    Warning
+}
+
+private data class BreakdownRow(
+    val label: String,
+    val value: String,
+    val tone: BreakdownTone = BreakdownTone.Neutral
+)
+
+@Composable
+private fun InsulinDoseBreakdown(
+    calculo: CalculoActual
+) {
+    val trendArrow = CgmTrendCorrection.trendArrow(calculo.tendenciaDireccion)
+    val dosisComidaConFactor = (calculo.unidadesInsulinaSinCorreccion + calculo.unidadesComidaReducidaPorActiva)
+        .coerceAtLeast(0f)
+    val fuenteTexto = when (calculo.glucosaFuente) {
+        CgmSource.NIGHTSCOUT -> "Nightscout"
+        CgmSource.MANUAL_FALLBACK -> "Manual (fallback)"
+        null -> "Sin dato"
+    }
+    val glucosaDetalle = when (calculo.glucosaFuente) {
+        CgmSource.NIGHTSCOUT -> {
+            val edad = calculo.glucosaEdadMinutos?.let { " · hace ${it} min" }.orEmpty()
+            val valor = calculo.glucosaUsadaMgdl?.toString() ?: "N/D"
+            "$valor mg/dL $trendArrow$edad"
+        }
+        CgmSource.MANUAL_FALLBACK -> {
+            val valor = calculo.glucosaUsadaMgdl?.toString() ?: "N/D"
+            "$valor mg/dL"
+        }
+        null -> "N/D"
+    }
+
+    val comidaRows = buildList {
+        add(
+            BreakdownRow(
+                label = "Comida base",
+                value = "${format1(calculo.unidadesComida)} U"
             )
         )
-        FilterChip(
-            selected = !conCorreccion,
-            onClick = { onChange(false) },
-            enabled = enabled,
-            label = {
-                Text(
-                    text = "Dosis sin ajustar",
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Ellipsis
+        add(
+            BreakdownRow(
+                label = "Factor contextual aplicado",
+                value = "x${format2(calculo.factorContextoTotalAplicado)}"
+            )
+        )
+        add(
+            BreakdownRow(
+                label = "Comida tras factor",
+                value = "${format1(dosisComidaConFactor)} U"
+            )
+        )
+        if (calculo.unidadesComidaReducidaPorActiva > 0f) {
+            add(
+                BreakdownRow(
+                    label = "Resta por insulina activa",
+                    value = "-${format1(calculo.unidadesComidaReducidaPorActiva)} U",
+                    tone = BreakdownTone.Reduction
                 )
-            },
+            )
+        }
+        add(
+            BreakdownRow(
+                label = "Comida neta",
+                value = "${format1(calculo.unidadesInsulinaSinCorreccion)} U",
+                tone = BreakdownTone.Emphasis
+            )
+        )
+        if (calculo.factorContextoCapado) {
+            add(
+                BreakdownRow(
+                    label = "Factor original (capado)",
+                    value = "x${format2(calculo.factorContextoTotalRaw)}",
+                    tone = BreakdownTone.Warning
+                )
+            )
+        }
+    }
+
+    val correccionRows = buildList {
+        add(BreakdownRow("Fuente de glucosa", fuenteTexto))
+        add(BreakdownRow("Glucosa usada", glucosaDetalle))
+        if (calculo.glucosaFuente == CgmSource.NIGHTSCOUT && calculo.glucosaProyectadaMgdl != null) {
+            add(
+                BreakdownRow(
+                    label = "Glucosa proyectada (30 min)",
+                    value = "${calculo.glucosaProyectadaMgdl} mg/dL"
+                )
+            )
+        }
+        if (kotlin.math.abs(calculo.ajusteTendenciaRaw) >= 0.05f) {
+            add(
+                BreakdownRow(
+                    label = "Ajuste por tendencia",
+                    value = formatSignedUnits(calculo.ajusteTendenciaRaw),
+                    tone = if (calculo.ajusteTendenciaRaw >= 0f) {
+                        BreakdownTone.Positive
+                    } else {
+                        BreakdownTone.Reduction
+                    }
+                )
+            )
+        }
+        add(
+            BreakdownRow(
+                label = "Corrección bruta",
+                value = formatSignedUnits(calculo.unidadesCorreccionBruta),
+                tone = if (calculo.unidadesCorreccionBruta > 0f) {
+                    BreakdownTone.Positive
+                } else if (calculo.unidadesCorreccionBruta < 0f) {
+                    BreakdownTone.Reduction
+                } else {
+                    BreakdownTone.Neutral
+                }
+            )
+        )
+        if (calculo.unidadesCorreccionReducidaPorActiva > 0f) {
+            add(
+                BreakdownRow(
+                    label = "Resta por insulina activa",
+                    value = "-${format1(calculo.unidadesCorreccionReducidaPorActiva)} U",
+                    tone = BreakdownTone.Reduction
+                )
+            )
+        }
+        add(
+            BreakdownRow(
+                label = "Corrección neta",
+                value = formatSignedUnits(calculo.unidadesCorreccion),
+                tone = if (calculo.unidadesCorreccion > 0f) {
+                    BreakdownTone.Positive
+                } else if (calculo.unidadesCorreccion < 0f) {
+                    BreakdownTone.Reduction
+                } else {
+                    BreakdownTone.Neutral
+                }
+            )
+        )
+    }
+
+    val resultadoRows = buildList {
+        add(
+            BreakdownRow(
+                label = "Comida neta",
+                value = "${format1(calculo.unidadesInsulinaSinCorreccion)} U"
+            )
+        )
+        add(
+            BreakdownRow(
+                label = "Corrección neta",
+                value = formatSignedUnits(calculo.unidadesCorreccion)
+            )
+        )
+        add(
+            BreakdownRow(
+                label = "Total final a guardar",
+                value = "${format1(calculo.unidadesInsulina)} U",
+                tone = BreakdownTone.Emphasis
+            )
+        )
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            text = "Desglose de dosis",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        BreakdownSection(
+            title = "Comida",
+            rows = comidaRows
+        )
+        BreakdownSection(
+            title = "Corrección",
+            rows = correccionRows
+        )
+        BreakdownSection(
+            title = "Resultado final",
+            rows = resultadoRows
+        )
+    }
+}
+
+@Composable
+private fun BreakdownSection(
+    title: String,
+    rows: List<BreakdownRow>
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        ),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.secondary
+            )
+            rows.forEachIndexed { index, row ->
+                BreakdownRowItem(row = row)
+                if (index < rows.lastIndex) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BreakdownRowItem(row: BreakdownRow) {
+    val valueColor = when (row.tone) {
+        BreakdownTone.Neutral -> MaterialTheme.colorScheme.onSurface
+        BreakdownTone.Emphasis -> MaterialTheme.colorScheme.primary
+        BreakdownTone.Positive -> MaterialTheme.colorScheme.tertiary
+        BreakdownTone.Reduction -> WarningColor
+        BreakdownTone.Warning -> MaterialTheme.colorScheme.error
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = row.label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = row.value,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = valueColor
         )
     }
 }
@@ -1737,6 +1978,13 @@ private fun PlantillasDialog(
 }
 
 private fun format1(value: Float): String = String.format(Locale.getDefault(), "%.1f", value)
+
+private fun format2(value: Float): String = String.format(Locale.getDefault(), "%.2f", value)
+
+private fun formatSignedUnits(value: Float): String {
+    val sign = if (value >= 0f) "+" else ""
+    return "$sign${format1(value)} U"
+}
 
 private fun hidratosReferenciaText(alimento: Alimento): String {
     return if (alimento.tipoMedicionNormalizado() == TipoMedicionAlimento.ML ||

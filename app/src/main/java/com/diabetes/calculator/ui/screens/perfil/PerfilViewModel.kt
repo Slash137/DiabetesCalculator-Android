@@ -7,8 +7,10 @@ import androidx.lifecycle.viewModelScope
 import androidx.work.WorkManager
 import com.diabetes.calculator.data.entity.UsuarioProfile
 import com.diabetes.calculator.data.repository.UsuarioProfileRepository
+import com.diabetes.calculator.domain.SyncLinkTolerance
 import com.diabetes.calculator.util.BackupManager
 import com.diabetes.calculator.util.BackupPasswordStore
+import com.diabetes.calculator.work.LibreviewSyncWorker
 import com.diabetes.calculator.work.NightscoutSyncWorker
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -86,8 +88,20 @@ class PerfilViewModel(
     private val _nightscoutLinkOffsetMinutes = MutableStateFlow("15")
     val nightscoutLinkOffsetMinutes: StateFlow<String> = _nightscoutLinkOffsetMinutes.asStateFlow()
 
-    private val _nightscoutLinkOffsetUnits = MutableStateFlow("0.5")
+    private val _nightscoutLinkOffsetUnits = MutableStateFlow(SyncLinkTolerance.WINDOW_UNITS.toString())
     val nightscoutLinkOffsetUnits: StateFlow<String> = _nightscoutLinkOffsetUnits.asStateFlow()
+
+    private val _libreviewSyncActivo = MutableStateFlow(true)
+    val libreviewSyncActivo: StateFlow<Boolean> = _libreviewSyncActivo.asStateFlow()
+
+    private val _libreviewRegionOverride = MutableStateFlow("")
+    val libreviewRegionOverride: StateFlow<String> = _libreviewRegionOverride.asStateFlow()
+
+    private val _libreviewEmail = MutableStateFlow("")
+    val libreviewEmail: StateFlow<String> = _libreviewEmail.asStateFlow()
+
+    private val _libreviewPassword = MutableStateFlow("")
+    val libreviewPassword: StateFlow<String> = _libreviewPassword.asStateFlow()
 
     private val _factorHoraMadrugada = MutableStateFlow("1.0")
     val factorHoraMadrugada: StateFlow<String> = _factorHoraMadrugada.asStateFlow()
@@ -156,6 +170,7 @@ class PerfilViewModel(
     val isBackupLoading: StateFlow<Boolean> = _isBackupLoading.asStateFlow()
 
     private var profileJob: Job? = null
+    private var libreviewCredentialsDirty = false
 
     init {
         loadProfile()
@@ -180,7 +195,14 @@ class PerfilViewModel(
                     _nightscoutToken.value = profile.nightscoutToken ?: ""
                     _nightscoutSyncRegistrosActivo.value = profile.nightscoutSyncRegistrosActivo
                     _nightscoutLinkOffsetMinutes.value = profile.nightscoutLinkOffsetMinutes.toString()
-                    _nightscoutLinkOffsetUnits.value = profile.nightscoutLinkOffsetUnits.toString()
+                    _nightscoutLinkOffsetUnits.value = profile.nightscoutLinkOffsetUnits
+                        .coerceAtLeast(SyncLinkTolerance.WINDOW_UNITS)
+                        .toString()
+                    _libreviewSyncActivo.value = profile.libreviewSyncActivo
+                    _libreviewRegionOverride.value = profile.libreviewRegionOverride ?: ""
+                    _libreviewEmail.value = repository.getLibreviewEmail().orEmpty()
+                    _libreviewPassword.value = repository.getLibreviewPassword().orEmpty()
+                    libreviewCredentialsDirty = false
 
                     _factorHoraMadrugada.value = profile.factorHoraMadrugada.toString()
                     _factorHoraManana.value = profile.factorHoraManana.toString()
@@ -214,7 +236,12 @@ class PerfilViewModel(
                     _recordatorio2hActivo.value = false
                     _nightscoutSyncRegistrosActivo.value = false
                     _nightscoutLinkOffsetMinutes.value = "15"
-                    _nightscoutLinkOffsetUnits.value = "0.5"
+                    _nightscoutLinkOffsetUnits.value = SyncLinkTolerance.WINDOW_UNITS.toString()
+                    _libreviewSyncActivo.value = true
+                    _libreviewRegionOverride.value = ""
+                    _libreviewEmail.value = repository.getLibreviewEmail().orEmpty()
+                    _libreviewPassword.value = repository.getLibreviewPassword().orEmpty()
+                    libreviewCredentialsDirty = false
                     _factorHoraMadrugada.value = "1.0"
                     _factorHoraManana.value = "1.0"
                     _factorHoraTarde.value = "1.0"
@@ -317,6 +344,40 @@ class PerfilViewModel(
         }
     }
 
+    fun updateLibreviewSyncActivo(value: Boolean) {
+        _libreviewSyncActivo.value = value
+    }
+
+    fun updateLibreviewRegionOverride(value: String) {
+        _libreviewRegionOverride.value = value.uppercase(Locale.ROOT)
+    }
+
+    fun updateLibreviewEmail(value: String) {
+        _libreviewEmail.value = value
+        libreviewCredentialsDirty = true
+        persistLibreviewCredentialsDraft()
+    }
+
+    fun updateLibreviewPassword(value: String) {
+        _libreviewPassword.value = value
+        libreviewCredentialsDirty = true
+        persistLibreviewCredentialsDraft()
+    }
+
+    fun persistLibreviewCredentialsDraft(): Boolean {
+        val email = _libreviewEmail.value.trim().ifEmpty { null }
+        val password = _libreviewPassword.value.trim().ifEmpty { null }
+        val previousEmail = repository.getLibreviewEmail()?.trim()
+        val previousPassword = repository.getLibreviewPassword()?.trim()
+        val credentialsChanged = email != previousEmail || password != previousPassword
+
+        if (credentialsChanged) {
+            repository.clearLibreviewSessionSecrets()
+        }
+        repository.setLibreviewCredentials(email = email, password = password)
+        return credentialsChanged
+    }
+
     fun updateFactorHoraMadrugada(value: String) {
         if (isDecimalInput(value)) _factorHoraMadrugada.value = value
     }
@@ -402,6 +463,7 @@ class PerfilViewModel(
     }
 
     fun saveProfile() {
+        val credentialsChanged = libreviewCredentialsDirty || persistLibreviewCredentialsDraft()
         if (!validateFields()) {
             _uiState.value = PerfilUiState.Error("Por favor, completa todos los campos correctamente")
             return
@@ -412,6 +474,7 @@ class PerfilViewModel(
             try {
                 val currentProfile = repository.getProfileSync()
                 val wasSyncActive = currentProfile?.nightscoutSyncRegistrosActivo == true
+                val wasLibreviewSyncActive = currentProfile?.libreviewSyncActivo == true
                 val gramos = parseDecimal(_gramosPorRacion.value)
                 val ratio = parseDecimal(_ratioInsulina.value)
                 val objetivoHidratos = parseDecimal(_objetivoHidratosDia.value)
@@ -421,6 +484,10 @@ class PerfilViewModel(
                 val factorCorreccion = parseDecimal(_factorCorreccionMgdlPorU.value)
                 val linkOffsetMinutes = _nightscoutLinkOffsetMinutes.value.trim().toIntOrNull()
                 val linkOffsetUnits = parseDecimal(_nightscoutLinkOffsetUnits.value)
+                val libreviewRegionOverride = _libreviewRegionOverride.value
+                    .trim()
+                    .uppercase(Locale.ROOT)
+                    .ifEmpty { null }
 
                 val factorHoraMadrugada = parsePositiveFactor(_factorHoraMadrugada.value)
                 val factorHoraManana = parsePositiveFactor(_factorHoraManana.value)
@@ -499,13 +566,25 @@ class PerfilViewModel(
                 }
                 if (linkOffsetMinutes == null || linkOffsetMinutes < 0 || linkOffsetMinutes > 180) {
                     _uiState.value = PerfilUiState.Error(
-                        "Offset de hora para enlace Nightscout no válido (0-180 min)"
+                        "Ventana de hora global no válida (0-180 min)"
                     )
                     return@launch
                 }
-                if (linkOffsetUnits == null || linkOffsetUnits < 0f || linkOffsetUnits > 5f) {
+                if (
+                    linkOffsetUnits == null ||
+                    linkOffsetUnits < SyncLinkTolerance.WINDOW_UNITS ||
+                    linkOffsetUnits > 5f
+                ) {
                     _uiState.value = PerfilUiState.Error(
-                        "Offset de dosis para enlace Nightscout no válido (0-5 U)"
+                        "Ventana de dosis global no válida (1-5 U)"
+                    )
+                    return@launch
+                }
+                if (!libreviewRegionOverride.isNullOrBlank() &&
+                    !libreviewRegionOverride.matches(Regex("^[A-Z]{2}$"))
+                ) {
+                    _uiState.value = PerfilUiState.Error(
+                        "Región LibreView no válida (usa código ISO de 2 letras)"
                     )
                     return@launch
                 }
@@ -528,6 +607,9 @@ class PerfilViewModel(
                     nightscoutSyncBackfillDoneAt = currentProfile?.nightscoutSyncBackfillDoneAt,
                     nightscoutLinkOffsetMinutes = linkOffsetMinutes,
                     nightscoutLinkOffsetUnits = linkOffsetUnits,
+                    libreviewSyncActivo = _libreviewSyncActivo.value,
+                    libreviewRegionOverride = libreviewRegionOverride,
+                    libreviewBackfillDoneAt = currentProfile?.libreviewBackfillDoneAt,
                     factorHoraMadrugada = factorHoraMadrugada!!,
                     factorHoraManana = factorHoraManana!!,
                     factorHoraTarde = factorHoraTarde!!,
@@ -552,6 +634,14 @@ class PerfilViewModel(
                     NightscoutSyncWorker.enqueuePeriodic(workManager)
                     NightscoutSyncWorker.enqueueNow(workManager)
                 }
+                val libreviewRegionChanged = profile.libreviewRegionOverride != currentProfile?.libreviewRegionOverride
+                if (!wasLibreviewSyncActive && profile.libreviewSyncActivo) {
+                    LibreviewSyncWorker.enqueuePeriodic(workManager)
+                    LibreviewSyncWorker.enqueueNow(workManager, forceManual = true)
+                } else if (profile.libreviewSyncActivo && (credentialsChanged || libreviewRegionChanged)) {
+                    LibreviewSyncWorker.enqueueNow(workManager, forceManual = true)
+                }
+                libreviewCredentialsDirty = false
                 _saveSuccess.value = true
             } catch (e: Exception) {
                 _uiState.value = PerfilUiState.Error("Error al guardar: ${e.message}")
@@ -600,7 +690,7 @@ class PerfilViewModel(
         val minutes = _nightscoutLinkOffsetMinutes.value.trim().toIntOrNull()
         val units = parseDecimal(_nightscoutLinkOffsetUnits.value)
         val minutesOk = minutes != null && minutes in 0..180
-        val unitsOk = units != null && units >= 0f && units <= 5f
+        val unitsOk = units != null && units >= SyncLinkTolerance.WINDOW_UNITS && units <= 5f
         return minutesOk && unitsOk
     }
 

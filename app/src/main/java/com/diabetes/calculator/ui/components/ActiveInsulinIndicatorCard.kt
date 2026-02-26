@@ -1,5 +1,6 @@
 package com.diabetes.calculator.ui.components
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,6 +21,7 @@ fun ActiveInsulinIndicatorCard(
     snapshot: ActiveInsulinSnapshot,
     isLoading: Boolean,
     title: String,
+    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val valueText = if (isLoading) {
@@ -38,7 +40,15 @@ fun ActiveInsulinIndicatorCard(
     }
 
     Card(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable(onClick = onClick)
+                } else {
+                    Modifier
+                }
+            ),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.secondaryContainer
         )

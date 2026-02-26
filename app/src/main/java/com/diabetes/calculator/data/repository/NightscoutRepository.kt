@@ -8,8 +8,10 @@ import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFact
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import retrofit2.Retrofit
 import retrofit2.http.Body
 import retrofit2.http.GET
@@ -334,6 +336,46 @@ class NightscoutRepository {
         }
     }
 
+    suspend fun deleteByTreatmentOrEntryId(
+        baseUrl: String,
+        token: String?,
+        treatmentId: String
+    ): Boolean {
+        val cleanId = treatmentId.trim()
+        if (cleanId.isBlank()) return false
+        return if (cleanId.startsWith("entry:")) {
+            deleteEntryById(baseUrl, token, cleanId.removePrefix("entry:"))
+        } else {
+            deleteTreatmentById(baseUrl, token, cleanId)
+        }
+    }
+
+    suspend fun deleteTreatmentById(
+        baseUrl: String,
+        token: String?,
+        treatmentId: String
+    ): Boolean {
+        return executeDelete(
+            baseUrl = baseUrl,
+            token = token,
+            resource = "treatments",
+            id = treatmentId
+        )
+    }
+
+    suspend fun deleteEntryById(
+        baseUrl: String,
+        token: String?,
+        entryId: String
+    ): Boolean {
+        return executeDelete(
+            baseUrl = baseUrl,
+            token = token,
+            resource = "entries",
+            id = entryId
+        )
+    }
+
     fun resolveTreatmentMillis(treatment: NightscoutTreatment): Long? {
         val mills = parseLongElement(treatment.mills)
         if (mills != null && mills > 0L) return mills
@@ -464,6 +506,67 @@ class NightscoutRepository {
     private fun formatError(e: Exception): String {
         val detail = e.message?.takeIf { it.isNotBlank() } ?: "sin detalle"
         return "${e.javaClass.simpleName}: $detail"
+    }
+
+    private fun executeDelete(
+        baseUrl: String,
+        token: String?,
+        resource: String,
+        id: String
+    ): Boolean {
+        val cleanId = id.trim()
+        if (cleanId.isBlank()) return false
+        val base = normalizeUrl(baseUrl).toHttpUrlOrNull() ?: run {
+            lastErrorMessage = "URL Nightscout inválida"
+            return false
+        }
+
+        val attempts = buildList {
+            add(false)
+            add(true)
+        }
+
+        attempts.forEach { withJsonSuffix ->
+            val pathSegment = if (withJsonSuffix) "$cleanId.json" else cleanId
+            val url = base.newBuilder()
+                .addPathSegment("api")
+                .addPathSegment("v1")
+                .addPathSegment(resource)
+                .addPathSegment(pathSegment)
+                .apply {
+                    if (!token.isNullOrBlank()) {
+                        addQueryParameter("token", token)
+                    }
+                }
+                .build()
+            val request = Request.Builder()
+                .url(url)
+                .delete()
+                .build()
+            runCatching {
+                getClient().newCall(request).execute().use { response ->
+                    val code = response.code
+                    if (response.isSuccessful || code == 404) {
+                        lastErrorMessage = null
+                        true
+                    } else {
+                        lastErrorMessage = "DELETE /api/v1/$resource/$cleanId HTTP $code"
+                        false
+                    }
+                }
+            }.getOrElse { error ->
+                lastErrorMessage = if (error is Exception) {
+                    formatError(error)
+                } else {
+                    error.message ?: "Error DELETE Nightscout"
+                }
+                false
+            }.let { success ->
+                if (success) return true
+            }
+        }
+
+        return false
     }
 
     private fun isFastInsulin(insulinType: String?): Boolean {

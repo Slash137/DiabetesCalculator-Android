@@ -1,5 +1,6 @@
 package com.diabetes.calculator.data.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -29,7 +30,9 @@ import kotlinx.serialization.Serializable
 @Entity(
     tableName = "registro_comida",
     indices = [
-        Index(value = ["nightscoutTreatmentId"], unique = true)
+        Index(value = ["nightscoutTreatmentId"], unique = true),
+        Index(value = ["libreviewCarbsRecordNumber"]),
+        Index(value = ["libreviewInsulinRecordNumber"])
     ]
 )
 @Serializable
@@ -48,11 +51,17 @@ data class RegistroComida(
     val dosisConCorreccion: Boolean? = null,
     val unidadesCorreccionSugerida: Float? = null,
     val factorCorreccionMgdlPorUUsado: Float? = null,
+    @ColumnInfo(defaultValue = "'LOCAL'")
     val origenRegistro: String = OrigenRegistro.LOCAL.value,
     val nightscoutTreatmentId: String? = null,
     val unidadesInsulinaRemota: Float? = null,
     val nightscoutReconciliadoAt: Long? = null,
     val nightscoutSyncDcid: String? = null,
+    val libreviewCarbsRecordNumber: Long? = null,
+    val libreviewInsulinRecordNumber: Long? = null,
+    val libreviewCarbsPayloadHash: String? = null,
+    val libreviewInsulinPayloadHash: String? = null,
+    val libreviewReconciliadoAt: Long? = null,
     val franjaHorariaUsada: String? = null,
     val nivelEstresUsado: String? = null,
     val nivelEnfermedadUsado: String? = null,
@@ -65,6 +74,7 @@ data class RegistroComida(
     val factorEjercicioUsado: Float? = null,
     val factorContextoTotalRaw: Float? = null,
     val factorContextoTotalAplicado: Float? = null,
+    @ColumnInfo(defaultValue = "0")
     val factorContextoCapado: Boolean = false,
     val dosisConfirmadaAt: Long? = null
 )

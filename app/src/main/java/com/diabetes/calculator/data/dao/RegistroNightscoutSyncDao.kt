@@ -34,6 +34,9 @@ interface RegistroNightscoutSyncDao {
     @Query("SELECT COUNT(*) FROM registro_nightscout_sync WHERE status = 'PENDING'")
     fun observePendingCount(): Flow<Int>
 
+    @Query("SELECT registroId FROM registro_nightscout_sync WHERE status = 'PENDING'")
+    fun observePendingRegistroIds(): Flow<List<Int>>
+
     @Query("SELECT COUNT(*) FROM registro_nightscout_sync WHERE status = 'FAILED'")
     fun observeFailedCount(): Flow<Int>
 

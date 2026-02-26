@@ -5,6 +5,7 @@ import com.diabetes.calculator.data.entity.RegistroNightscoutSync
 import com.diabetes.calculator.data.entity.RegistroNightscoutSyncStatus
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 
 data class NightscoutRegistrosSyncSummary(
     val pendingCount: Int = 0,
@@ -32,6 +33,9 @@ class RegistroNightscoutSyncRepository(
             lastErrorMessage = lastErrorMessage
         )
     }
+
+    val pendingRegistroIds: Flow<Set<Int>> = dao.observePendingRegistroIds()
+        .map { ids -> ids.toSet() }
 
     suspend fun upsertPending(registroId: Int, now: Long = System.currentTimeMillis()) {
         val current = dao.getByRegistroId(registroId)

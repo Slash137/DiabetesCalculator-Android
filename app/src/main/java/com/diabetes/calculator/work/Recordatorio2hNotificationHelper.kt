@@ -82,7 +82,7 @@ object Recordatorio2hNotificationHelper {
         )
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_syringe_notification)
             .setContentTitle(title)
             .setContentText(contentText)
             .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
@@ -93,4 +93,3 @@ object Recordatorio2hNotificationHelper {
         manager.notify(notificationId, notification)
     }
 }
-

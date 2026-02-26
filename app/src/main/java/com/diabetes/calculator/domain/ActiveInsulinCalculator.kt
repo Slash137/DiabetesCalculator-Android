@@ -8,12 +8,20 @@ private const val ACTIVE_INSULIN_DURATION_MILLIS = ACTIVE_INSULIN_DURATION_MINUT
 data class ActiveInsulinSnapshot(
     val totalUnits: Float = 0f,
     val doseCount: Int = 0,
-    val minutesToZero: Int? = null
+    val minutesToZero: Int? = null,
+    val contributions: List<ActiveInsulinDoseContribution> = emptyList()
 )
 
 data class ActiveInsulinDoseEvent(
     val units: Float,
     val eventMillis: Long
+)
+
+data class ActiveInsulinDoseContribution(
+    val originalUnits: Float,
+    val activeUnits: Float,
+    val eventMillis: Long,
+    val minutesRemaining: Int
 )
 
 object ActiveInsulinCalculator {
@@ -36,8 +44,8 @@ object ActiveInsulinCalculator {
         nowMillis: Long
     ): ActiveInsulinSnapshot {
         var total = 0f
-        var count = 0
         var maxRemainingMinutes = 0
+        val contributions = mutableListOf<ActiveInsulinDoseContribution>()
 
         events.forEach { event ->
             val units = event.units
@@ -53,23 +61,29 @@ object ActiveInsulinCalculator {
             if (!active.isFinite() || active <= 0f) return@forEach
 
             total += active
-            count += 1
 
             val remainingMillis = ACTIVE_INSULIN_DURATION_MILLIS - elapsed
             val remainingMinutes = ((remainingMillis + 59_999L) / 60_000L).toInt().coerceAtLeast(1)
             if (remainingMinutes > maxRemainingMinutes) {
                 maxRemainingMinutes = remainingMinutes
             }
-        }
-
-        return if (count == 0) {
-            ActiveInsulinSnapshot()
-        } else {
-            ActiveInsulinSnapshot(
-                totalUnits = total,
-                doseCount = count,
-                minutesToZero = maxRemainingMinutes
+            contributions += ActiveInsulinDoseContribution(
+                originalUnits = units,
+                activeUnits = active,
+                eventMillis = eventMillis,
+                minutesRemaining = remainingMinutes
             )
         }
+
+        if (contributions.isEmpty()) {
+            return ActiveInsulinSnapshot()
+        }
+        val sortedContributions = contributions.sortedByDescending { it.eventMillis }
+        return ActiveInsulinSnapshot(
+            totalUnits = total,
+            doseCount = sortedContributions.size,
+            minutesToZero = maxRemainingMinutes,
+            contributions = sortedContributions
+        )
     }
 }

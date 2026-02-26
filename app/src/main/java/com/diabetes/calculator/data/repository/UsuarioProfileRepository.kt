@@ -2,6 +2,7 @@ package com.diabetes.calculator.data.repository
 
 import com.diabetes.calculator.data.dao.UsuarioProfileDao
 import com.diabetes.calculator.data.entity.UsuarioProfile
+import com.diabetes.calculator.util.LibreviewSecretStore
 import com.diabetes.calculator.util.NightscoutTokenStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -12,7 +13,8 @@ import kotlinx.coroutines.flow.map
  */
 class UsuarioProfileRepository(
     private val dao: UsuarioProfileDao,
-    private val tokenStore: NightscoutTokenStore
+    private val tokenStore: NightscoutTokenStore,
+    private val libreviewSecretStore: LibreviewSecretStore? = null
 ) {
 
     /**
@@ -61,11 +63,28 @@ class UsuarioProfileRepository(
         dao.updateNightscoutBackfillDoneAt(profileId, timestamp)
     }
 
+    suspend fun updateLibreviewBackfillDoneAt(profileId: Int, timestamp: Long?) {
+        dao.updateLibreviewBackfillDoneAt(profileId, timestamp)
+    }
+
+    fun getLibreviewEmail(): String? = libreviewSecretStore?.getEmail()
+
+    fun getLibreviewPassword(): String? = libreviewSecretStore?.getPassword()
+
+    fun setLibreviewCredentials(email: String?, password: String?) {
+        libreviewSecretStore?.setCredentials(email, password)
+    }
+
+    fun clearLibreviewSessionSecrets() {
+        libreviewSecretStore?.clearSession()
+    }
+
     /**
      * Elimina el perfil del usuario.
      */
     suspend fun deleteAll() {
         tokenStore.setToken(null)
+        libreviewSecretStore?.clearAll()
         dao.deleteAll()
     }
 
