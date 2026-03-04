@@ -350,8 +350,15 @@ class HistorialViewModel(
             )
             val profile = usuarioRepository.getProfileSync()
             if (profile?.libreviewSyncActivo == true) {
-                libreviewSyncService.enqueueUpsertForRegistro(registroId)
-                LibreviewSyncWorker.enqueueNow(workManager, forceManual = true)
+                libreviewSyncService.enqueueUpsertForRegistro(
+                    registroId = registroId,
+                    allowPendingInsulin = true
+                )
+                LibreviewSyncWorker.enqueueNow(
+                    workManager = workManager,
+                    forceManual = true,
+                    targetRegistroId = registroId
+                )
             }
         }
     }

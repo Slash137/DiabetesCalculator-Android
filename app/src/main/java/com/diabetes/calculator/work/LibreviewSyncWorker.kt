@@ -65,6 +65,8 @@ class LibreviewSyncWorker(
             var keepRepairInProgress = false
 
             try {
+                val targetRegistroId = inputData.getInt(KEY_TARGET_REGISTRO_ID, -1)
+                    .takeIf { it > 0 }
                 val database = AppDatabase.getDatabase(applicationContext)
                 val tokenStore = NightscoutTokenStore(applicationContext)
                 val libreviewSecretStore = LibreviewSecretStore(applicationContext)
@@ -178,6 +180,16 @@ class LibreviewSyncWorker(
                         forceReuploadInsulin = true,
                         now = now
                     )
+                    // Explicit adjustments from historial must always be synced, even if outside
+                    // the default insulin cutoff window used for bulk manual reupload.
+                    targetRegistroId?.let { registroId ->
+                        service.enqueueUpsertForRegistro(
+                            registroId = registroId,
+                            now = now,
+                            includeAllOrigins = false,
+                            allowPendingInsulin = true
+                        )
+                    }
                 }
 
                 if (email.isBlank() || password.isBlank()) {
@@ -1627,6 +1639,7 @@ class LibreviewSyncWorker(
         private const val KEY_EXECUTION_MODE = "execution_mode"
         private const val KEY_REPAIR_RUN_ID = "repair_run_id"
         private const val KEY_WIPE_ROUND = "wipe_round"
+        private const val KEY_TARGET_REGISTRO_ID = "target_registro_id"
         private const val MODE_NORMAL = "NORMAL"
         private const val MODE_REPAIR_RESET = "REPAIR_RESET"
         private const val MODE_REPAIR_RETRY_CHAIN = "REPAIR_RETRY_CHAIN"
@@ -1698,13 +1711,15 @@ class LibreviewSyncWorker(
             workManager: WorkManager,
             forceManual: Boolean = false,
             emailOverride: String? = null,
-            passwordOverride: String? = null
+            passwordOverride: String? = null,
+            targetRegistroId: Int? = null
         ) {
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
                 .build()
             val trimmedEmail = emailOverride?.trim()?.ifEmpty { null }
             val trimmedPassword = passwordOverride?.trim()?.ifEmpty { null }
+            val targetId = targetRegistroId?.takeIf { it > 0 } ?: -1
             val request = OneTimeWorkRequestBuilder<LibreviewSyncWorker>()
                 .setConstraints(constraints)
                 .setInputData(
@@ -1712,7 +1727,8 @@ class LibreviewSyncWorker(
                         KEY_FORCE_MANUAL to forceManual,
                         KEY_EXECUTION_MODE to MODE_NORMAL,
                         KEY_EMAIL_OVERRIDE to trimmedEmail,
-                        KEY_PASSWORD_OVERRIDE to trimmedPassword
+                        KEY_PASSWORD_OVERRIDE to trimmedPassword,
+                        KEY_TARGET_REGISTRO_ID to targetId
                     )
                 )
                 .build()
